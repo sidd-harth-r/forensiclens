@@ -13,6 +13,7 @@ node_modules/
 # Production build outputs
 dist/
 dist-ssr/
+*.tsbuildinfo
 
 # Local env files
 *.local

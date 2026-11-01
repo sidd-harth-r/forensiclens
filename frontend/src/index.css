@@ -1,0 +1,114 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Surfaces */
+    --background: #F8FAFC;
+    --surface: #FFFFFF;
+    --surface-subtle: #F1F5F9;
+    --surface-muted: #E2E8F0;
+    --surface-inverse: #0F172A;
+
+    /* Text */
+    --text-primary: #0F172A;
+    --text-secondary: #334155;
+    --text-muted: #64748B;
+    --text-disabled: #94A3B8;
+    --text-inverse: #F8FAFC;
+
+    /* Borders (Light control borders >= 3:1 contrast) */
+    --border: #CBD5E1;
+    --border-subtle: #E2E8F0;
+    --border-strong: #94A3B8;
+
+    /* Accent (Indigo only) */
+    --accent: #4F46E5;
+    --accent-hover: #4338CA;
+    --accent-active: #3730A3;
+    --accent-subtle: #EEF2FF;
+    --accent-text: #3730A3;
+
+    /* Semantic Status (Light) */
+    --status-success: #15803D;
+    --status-success-bg: #F0FDF4;
+
+    --status-warning: #A16207;
+    --status-warning-bg: #FEFCE8;
+
+    --status-danger: #B91C1C;
+    --status-danger-bg: #FEF2F2;
+
+    --status-neutral: #475569;
+    --status-neutral-bg: #F1F5F9;
+
+    --status-human: #7C3AED;
+    --status-human-bg: #F5F3FF;
+  }
+
+  .dark {
+    /* Surfaces (Dark mode slate, not pure black) */
+    --background: #0B1120;
+    --surface: #111827;
+    --surface-subtle: #172033;
+    --surface-muted: #1E293B;
+    --surface-inverse: #F8FAFC;
+
+    /* Text */
+    --text-primary: #F8FAFC;
+    --text-secondary: #CBD5E1;
+    --text-muted: #94A3B8;
+    --text-disabled: #64748B;
+    --text-inverse: #0F172A;
+
+    /* Borders */
+    --border: #334155;
+    --border-subtle: #1E293B;
+    --border-strong: #475569;
+
+    /* Accent (Indigo in Dark) */
+    --accent: #818CF8;
+    --accent-hover: #A5B4FC;
+    --accent-active: #6366F1;
+    --accent-subtle: #1E1B4B;
+    --accent-text: #C7D2FE;
+
+    /* Semantic Status (Dark) */
+    --status-success: #4ADE80;
+    --status-success-bg: #052E16;
+
+    --status-warning: #FACC15;
+    --status-warning-bg: #422006;
+
+    --status-danger: #F87171;
+    --status-danger-bg: #450A0A;
+
+    --status-neutral: #CBD5E1;
+    --status-neutral-bg: #1E293B;
+
+    --status-human: #C4B5FD;
+    --status-human-bg: #2E1065;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-text-primary;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  ::selection {
+    background-color: rgba(79, 70, 229, 0.2);
+  }
+
+  /* Accessible focus indicators */
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+}
