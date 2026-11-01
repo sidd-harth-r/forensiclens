@@ -1,0 +1,32 @@
+version: "3.8"
+
+services:
+  forensiclens:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: forensiclens-app
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - APP_ENV=production
+      - APP_HOST=0.0.0.0
+      - APP_PORT=8000
+      - DATA_DIR=/app/data
+      - CASES_DIR=/app/data/cases
+      - MODELS_DIR=/app/data/models
+      - DATABASE_TIMEOUT=5000
+      - CHROMA_TELEMETRY=false
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+      - ANONYMIZED_TELEMETRY=False
+    networks:
+      - forensiclens-network
+
+networks:
+  forensiclens-network:
+    driver: bridge
+    internal: true
