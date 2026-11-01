@@ -1,7 +1,7 @@
 import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
-import { CheckCircle2, AlertTriangle, XCircle, HelpCircle, UserCheck } from "lucide-react";
+import { CheckCircle2, AlertTriangle, XCircle, HelpCircle, UserCheck, Loader2, Clock } from "lucide-react";
 
 export const badgeVariants = cva(
   "inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium transition-colors border",
@@ -88,6 +88,18 @@ export function ParserStatusBadge({ status }: { status: string }) {
           PARTIAL
         </Badge>
       );
+    case "PROCESSING":
+      return (
+        <Badge variant="accent" icon={<Loader2 className="w-3 h-3 text-accent animate-spin" aria-hidden="true" />}>
+          PROCESSING
+        </Badge>
+      );
+    case "UNSUPPORTED":
+      return (
+        <Badge variant="neutral" icon={<HelpCircle className="w-3 h-3 text-text-muted" aria-hidden="true" />}>
+          UNSUPPORTED
+        </Badge>
+      );
     case "FAILED":
       return (
         <Badge variant="danger" icon={<XCircle className="w-3 h-3 text-status-danger" aria-hidden="true" />}>
@@ -97,7 +109,7 @@ export function ParserStatusBadge({ status }: { status: string }) {
     case "PENDING":
     default:
       return (
-        <Badge variant="neutral" icon={<HelpCircle className="w-3 h-3 text-status-neutral" aria-hidden="true" />}>
+        <Badge variant="neutral" icon={<Clock className="w-3 h-3 text-text-muted" aria-hidden="true" />}>
           PENDING
         </Badge>
       );

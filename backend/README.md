@@ -42,6 +42,7 @@ All endpoints follow the `/api/...` convention and enforce strict per-case SQLit
 | `GET` | `/api/cases/{case_id}/evidence` | List all ingested evidence files in the case |
 | `GET` | `/api/cases/{case_id}/evidence/{evidence_id}` | Retrieve evidence metadata and SHA-256 hash status |
 | `POST` | `/api/cases/{case_id}/evidence` | Ingest and hash evidence artifact (multipart/form-data) |
+| `POST` | `/api/cases/{case_id}/evidence/{evidence_id}/process` | Parse evidence artifact and persist normalized events |
 
 ### Events
 
@@ -105,6 +106,13 @@ curl -X POST http://127.0.0.1:8000/api/cases \
 curl -X POST http://127.0.0.1:8000/api/cases/CASE-2026-001/evidence \
   -F "file=@auth.log" \
   -F "format_name=OPENSSH"
+```
+
+### Process Evidence with Parser
+```bash
+curl -X POST http://127.0.0.1:8000/api/cases/CASE-2026-001/evidence/EV_4A2B9F3E1C78495A/process \
+  -H "Content-Type: application/json" \
+  -d '{"parserName": "OPENSSH"}'
 ```
 
 ### Query Events with FTS5 Lexical Search

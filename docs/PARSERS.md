@@ -485,7 +485,82 @@ Running `pytest -v` across the entire project test suite:
 
 ---
 
-## 10. Known Limitations & Future Scope
+## 11. Evidence Processing Service & API Integration
+
+### 11.1 Evidence Processing Workflow
+
+ForensicLens implements an end-to-end evidence processing pipeline that bridges immutable storage, parser detection, parsing, and atomic SQLite persistence:
+
+```text
+Evidence Ingestion (Upload)
+             │
+             ▼
+   Stored as Immutable Object
+  (`evidence_files.parser_status = 'PENDING'`)
+             │
+             ▼
+   POST /api/cases/{case_id}/evidence/{evidence_id}/process
+             │
+             ├── 1. Check idempotency (reject if raw_records exist -> 409 Conflict)
+             ├── 2. Resolve parser from format/registry or heuristic detection
+             │      (marks 'UNSUPPORTED' if unrecognized)
+             ├── 3. Read raw bytes directly from immutable artifact storage
+             ├── 4. Execute parser (e.g. OpenSSHParser)
+             ├── 5. Atomic persistence via ParserPersistenceService (SAVEPOINT)
+             └── 6. Update `evidence_files.parser_status` ('PARSED' / 'PARTIAL' / 'FAILED')
+```
+
+### 11.2 API Endpoint: Process Evidence
+
+**Route:** `POST /api/cases/{case_id}/evidence/{evidence_id}/process`  
+**Tags:** `Evidence`
+
+#### Request
+Optional JSON payload or query parameter `parserName` / `parser_name`:
+```json
+{
+  "parserName": "OPENSSH"
+}
+```
+
+#### Response (200 OK)
+```json
+{
+  "caseId": "CASE-2026-001",
+  "evidenceId": "EV_4A2B9F3E1C78495A",
+  "parserName": "openssh",
+  "parserVersion": "1.0.0",
+  "rawRecordsCount": 1240,
+  "eventsCount": 1198,
+  "unparsedRecordsCount": 42,
+  "status": "PARSED",
+  "errorSummary": null
+}
+```
+
+#### HTTP Status Codes
+- `200 OK`: Evidence successfully parsed and persisted.
+- `400 Bad Request`: Invalid evidence state or malformed request.
+- `404 Not Found`: Case or evidence artifact does not exist.
+- `409 Conflict`: Evidence has already been parsed and persisted into this case.
+- `422 Unprocessable Entity`: No compatible parser registered for the given format or filename.
+
+### 11.3 Idempotency and Anti-Tampering Guarantee
+
+In strict forensic workflows, evidence processing must be idempotent and verifiable:
+- **Duplicate Prevention**: Before parsing begins, the service queries `raw_records` for the `(case_id, evidence_id)` tuple. If records already exist, an `AlreadyPersistedError` is raised, mapping cleanly to `409 Conflict`.
+- **Atomic Rollback**: Processing operates inside a dedicated SQL `SAVEPOINT`. If any record fails schema validation or integrity constraints, the entire batch of raw records, events, and FTS5 entries rolls back cleanly with zero partial state.
+- **Audit Tracking**: The `evidence_files` record is updated with exact timestamps, line counts, and final parser status (`PARSED`, `PARTIAL`, `FAILED`, or `UNSUPPORTED`).
+
+### 11.4 User Interface Integration
+
+The ForensicLens Evidence Page (`frontend/src/pages/EvidencePage.tsx`):
+- Lists all ingested evidence artifacts with SHA-256 digests and integrity verification.
+- Displays parser status badges (`PENDING`, `PROCESSING`, `PARSED`, `PARTIAL`, `UNSUPPORTED`, `FAILED`).
+- Provides a dedicated **Process Evidence** action button with interactive spinning loader during execution.
+- Displays parsed event counts directly in the table row upon completion.
+- Provides a direct **View Events →** navigation link routing the investigator to the case's normalized timeline in `/events`.
+
 
 1. **Year and Timezone Resolution Deferred**: OpenSSH logs with BSD syslog timestamps do not contain year or timezone information. Normalization to UTC is intentionally deferred to Phase 2 (Timeline and Correlation Engine).
 2. **Initial Parser Scope**: OpenSSH is the initial reference parser. Parsers for Apache, Nginx, Linux auditd, Windows EVTX, and network flow records will be implemented in subsequent milestones using the same `BaseParser` foundation.

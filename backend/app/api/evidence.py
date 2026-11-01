@@ -1,7 +1,8 @@
 """
 Evidence management API endpoints.
 
-Provides immutable artifact ingestion, SHA-256 verification, and evidence discovery.
+Provides immutable artifact ingestion, SHA-256 verification, evidence discovery,
+and deterministic parser processing into raw records and normalized events.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ import sqlite3
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.api.deps import get_case_connection, get_verified_case_dir, validate_identifier
 from app.evidence.service import (
@@ -22,8 +23,17 @@ from app.evidence.service import (
     ingest_evidence,
     list_evidence,
 )
-from app.parsers.openssh import OpenSSHParser
-from app.parsers.persistence import persist_parse_result
+from app.parsers.persistence import (
+    AlreadyPersistedError,
+    CaseNotFoundError,
+    EvidenceNotFoundError,
+    PersistenceError,
+    ReferentialIntegrityError,
+)
+from app.parsers.service import (
+    EvidenceArtifactNotFoundError,
+    process_evidence,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +54,25 @@ class EvidenceResponse(BaseModel):
     hashVerifiedAt: Optional[str] = None
     createdAt: str
     storagePath: Optional[str] = None
+
+
+class ProcessEvidenceRequest(BaseModel):
+    parserName: Optional[str] = Field(
+        default=None,
+        description="Optional explicit parser name or format (e.g. 'OPENSSH' or 'openssh')",
+    )
+
+
+class ProcessEvidenceResponse(BaseModel):
+    caseId: str
+    evidenceId: str
+    parserName: str
+    parserVersion: Optional[str] = None
+    rawRecordsCount: int = 0
+    eventsCount: int = 0
+    unparsedRecordsCount: int = 0
+    status: str
+    errorSummary: Optional[str] = None
 
 
 def _to_response(record: EvidenceRecord) -> EvidenceResponse:
@@ -101,17 +130,20 @@ def upload_case_evidence(
     case_id: str,
     file: UploadFile = File(...),
     format_name: Optional[str] = Form(None),
+    auto_process: bool = Form(False),
     conn: sqlite3.Connection = Depends(get_case_connection),
 ) -> EvidenceResponse:
     """
     Ingest a new immutable evidence artifact into the case directory.
 
-    Computes streaming SHA-256 hash, checks for duplicates, creates database record,
-    and automatically triggers parsing when a supported parser is available.
+    Computes streaming SHA-256 hash, checks for duplicates, and creates a database record
+    with parser_status 'PENDING'. If auto_process is True, executes processing immediately.
     """
     case_dir = get_verified_case_dir(case_id)
     if not isinstance(format_name, str):
         format_name = None
+    if not isinstance(auto_process, bool):
+        auto_process = False
     original_filename = file.filename or "evidence.log"
 
     try:
@@ -124,25 +156,21 @@ def upload_case_evidence(
             format_name=format_name,
         )
 
-        # Trigger parser persistence automatically for OpenSSH / auth logs
-        if record.format == "OPENSSH" or "auth" in original_filename.lower():
+        if auto_process:
             try:
-                parser = OpenSSHParser()
-                parse_result = parser.parse(
-                    record.storage_path, evidence_id=record.evidence_id
-                )
-                persist_parse_result(
+                process_evidence(
+                    case_dir=case_dir,
                     case_id=case_id,
-                    parse_result=parse_result,
+                    evidence_id=record.evidence_id,
                     conn=conn,
+                    parser_name_or_format=format_name,
                 )
-                # Re-fetch updated record reflecting parsed line count and status
                 updated = get_evidence(conn, case_dir, record.evidence_id)
                 if updated:
                     record = updated
             except Exception as pe:
                 logger.warning(
-                    "Automatic parsing failed for evidence %s: %s",
+                    "Auto-processing during upload failed for evidence %s: %s",
                     record.evidence_id,
                     pe,
                 )
@@ -163,4 +191,70 @@ def upload_case_evidence(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Evidence ingestion failed: {e}",
+        ) from e
+
+
+@router.post("/{evidence_id}/process", response_model=ProcessEvidenceResponse)
+def process_case_evidence_endpoint(
+    case_id: str,
+    evidence_id: str,
+    request: Optional[ProcessEvidenceRequest] = None,
+    conn: sqlite3.Connection = Depends(get_case_connection),
+) -> ProcessEvidenceResponse:
+    """
+    Process an ingested evidence artifact through the pluggable parser pipeline.
+
+    Reads the stored immutable artifact, executes the resolved parser, and
+    persists raw records and normalized events into the case database.
+    """
+    validate_identifier(case_id, "case_id")
+    validate_identifier(evidence_id, "evidence_id")
+    case_dir = get_verified_case_dir(case_id)
+
+    parser_name = request.parserName if request and isinstance(request, ProcessEvidenceRequest) else None
+
+    try:
+        result = process_evidence(
+            case_dir=case_dir,
+            case_id=case_id,
+            evidence_id=evidence_id,
+            conn=conn,
+            parser_name_or_format=parser_name,
+        )
+
+        return ProcessEvidenceResponse(
+            caseId=result.case_id,
+            evidenceId=result.evidence_id,
+            parserName=result.parser_name,
+            parserVersion=result.parser_version,
+            rawRecordsCount=result.raw_records_count,
+            eventsCount=result.events_count,
+            unparsedRecordsCount=result.unparsed_records_count,
+            status=result.status,
+            errorSummary=result.error_summary,
+        )
+    except AlreadyPersistedError as ape:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(ape),
+        ) from ape
+    except (
+        EvidenceNotFoundError,
+        CaseNotFoundError,
+        ReferentialIntegrityError,
+        EvidenceArtifactNotFoundError,
+    ) as nf:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(nf),
+        ) from nf
+    except PersistenceError as pe:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Persistence transaction failed: {pe}",
+        ) from pe
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Evidence processing failed: {e}",
         ) from e

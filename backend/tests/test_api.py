@@ -241,6 +241,7 @@ def test_upload_case_evidence_and_auto_parse(api_test_data):
             case_id=api_test_data["case_2_id"],
             file=upload,
             format_name="OPENSSH",
+            auto_process=True,
             conn=conn_2,
         )
 

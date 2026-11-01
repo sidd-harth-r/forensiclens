@@ -36,12 +36,21 @@ from app.parsers.registry import (
     list_parsers,
     register_parser,
 )
+from app.parsers.service import (
+    EvidenceArtifactNotFoundError,
+    EvidenceProcessingError,
+    ProcessResult,
+    UnsupportedParserError,
+    process_evidence,
+)
 
 __all__ = [
     "AlreadyPersistedError",
     "BaseParser",
     "CaseNotFoundError",
+    "EvidenceArtifactNotFoundError",
     "EvidenceNotFoundError",
+    "EvidenceProcessingError",
     "OpenSSHParser",
     "ParseResult",
     "ParsedEvent",
@@ -50,9 +59,11 @@ __all__ = [
     "ParserRegistry",
     "PersistenceError",
     "PersistenceResult",
+    "ProcessResult",
     "RawRecord",
     "ReferentialIntegrityError",
     "UnknownParserError",
+    "UnsupportedParserError",
     "classify_ip_scope",
     "compute_event_hash",
     "default_registry",
@@ -62,5 +73,6 @@ __all__ = [
     "list_parsers",
     "normalize_timestamp",
     "persist_parse_result",
+    "process_evidence",
     "register_parser",
 ]

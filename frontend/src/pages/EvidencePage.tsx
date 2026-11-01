@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import { Link } from "react-router-dom";
 import { useCase } from "@/context/CaseContext";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Card, CardContent } from "@/components/ui/Card";
@@ -16,19 +17,21 @@ import {
 import { EmptyState } from "@/components/common/EmptyState";
 import { LoadingState } from "@/components/common/LoadingState";
 import { ErrorState } from "@/components/common/ErrorState";
-import { getEvidenceFiles, uploadEvidence } from "@/services/evidence";
-import { EvidenceFile } from "@/types/evidence";
+import { getEvidenceFiles, uploadEvidence, processEvidence } from "@/services/evidence";
+import { EvidenceFile, ProcessEvidenceResult } from "@/types/evidence";
 import { formatBytes, formatHash, formatDateTime } from "@/lib/formatters";
 import {
   HardDrive,
   Search,
   Upload,
-  CheckCircle2,
   FileCode,
   FileText,
   Copy,
   ShieldCheck,
   X,
+  Cpu,
+  Loader2,
+  ArrowRight,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -46,6 +49,41 @@ export function EvidencePage() {
   const [selectedFormat, setSelectedFormat] = useState<string>("OPENSSH");
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Processing state
+  const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
+  const [processingResults, setProcessingResults] = useState<Record<string, ProcessEvidenceResult>>({});
+
+  const handleProcess = async (ev: EvidenceFile) => {
+    if (!currentCase?.caseId) {
+      toast.error("No active case selected");
+      return;
+    }
+    const { evidenceId, format, originalName } = ev;
+
+    setProcessingIds((prev) => new Set(prev).add(evidenceId));
+    try {
+      const result = await processEvidence(currentCase.caseId, evidenceId, format);
+      setProcessingResults((prev) => ({
+        ...prev,
+        [evidenceId]: result,
+      }));
+      toast.success(
+        `Processed ${originalName}: generated ${result.eventsCount} events (${result.rawRecordsCount} raw records)`
+      );
+      await loadEvidence();
+      await refreshCases();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Evidence processing failed");
+      await loadEvidence();
+    } finally {
+      setProcessingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(evidenceId);
+        return next;
+      });
+    }
+  };
 
   const loadEvidence = useCallback(async () => {
     if (!currentCase?.caseId) {
@@ -226,93 +264,146 @@ export function EvidencePage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-40">Evidence ID</TableHead>
+                  <TableHead className="w-36">Evidence ID</TableHead>
                   <TableHead>Source Filename</TableHead>
                   <TableHead className="w-24">Format</TableHead>
-                  <TableHead className="w-48">SHA-256 Digest</TableHead>
-                  <TableHead className="w-24 text-right">Size</TableHead>
-                  <TableHead className="w-24 text-right">Lines</TableHead>
+                  <TableHead className="w-36">SHA-256 Digest</TableHead>
+                  <TableHead className="w-20 text-right">Size</TableHead>
+                  <TableHead className="w-32 text-right">Events / Lines</TableHead>
                   <TableHead className="w-28 text-center">Status</TableHead>
-                  <TableHead className="w-40">Ingested UTC</TableHead>
-                  <TableHead className="w-24 text-center">Integrity</TableHead>
+                  <TableHead className="w-36">Ingested UTC</TableHead>
+                  <TableHead className="w-36 text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredEvidence.map((ev) => (
-                  <TableRow key={ev.evidenceId}>
-                    <TableCell className="font-mono text-xs font-semibold text-text-primary">
-                      <span className="flex items-center gap-1">
-                        {ev.evidenceId}
-                        <button
-                          type="button"
-                          onClick={() => copyToClipboard(ev.evidenceId, "Evidence ID")}
-                          className="text-text-muted hover:text-text-primary p-0.5"
-                          title="Copy Evidence ID"
-                        >
-                          <Copy className="w-3 h-3" />
-                        </button>
-                      </span>
-                    </TableCell>
+                {filteredEvidence.map((ev) => {
+                  const isProcessing = processingIds.has(ev.evidenceId);
+                  const currentStatus = isProcessing ? "PROCESSING" : ev.parserStatus;
+                  const result = processingResults[ev.evidenceId];
 
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        {ev.format === "OPENSSH" || ev.format === "SYSLOG" ? (
-                          <FileText className="w-3.5 h-3.5 text-accent shrink-0" />
-                        ) : (
-                          <FileCode className="w-3.5 h-3.5 text-purple-500 shrink-0" />
-                        )}
-                        <span className="font-mono text-xs font-medium text-text-primary">
-                          {ev.originalName}
+                  return (
+                    <TableRow key={ev.evidenceId}>
+                      <TableCell className="font-mono text-xs font-semibold text-text-primary">
+                        <span className="flex items-center gap-1">
+                          {ev.evidenceId}
+                          <button
+                            type="button"
+                            onClick={() => copyToClipboard(ev.evidenceId, "Evidence ID")}
+                            className="text-text-muted hover:text-text-primary p-0.5"
+                            title="Copy Evidence ID"
+                          >
+                            <Copy className="w-3 h-3" />
+                          </button>
                         </span>
-                      </div>
-                    </TableCell>
+                      </TableCell>
 
-                    <TableCell>
-                      <Badge variant="default" className="font-mono">
-                        {ev.format}
-                      </Badge>
-                    </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          {ev.format === "OPENSSH" || ev.format === "SYSLOG" ? (
+                            <FileText className="w-3.5 h-3.5 text-accent shrink-0" />
+                          ) : (
+                            <FileCode className="w-3.5 h-3.5 text-purple-500 shrink-0" />
+                          )}
+                          <span className="font-mono text-xs font-medium text-text-primary">
+                            {ev.originalName}
+                          </span>
+                        </div>
+                      </TableCell>
 
-                    <TableCell className="font-mono text-[11px] text-text-muted">
-                      <div className="flex items-center gap-1">
-                        <span title={ev.objectHash}>{formatHash(ev.objectHash)}</span>
-                        <button
-                          type="button"
-                          onClick={() => copyToClipboard(ev.objectHash, "SHA-256")}
-                          className="text-text-muted hover:text-text-primary p-0.5"
-                          title="Copy full SHA-256 hash"
-                        >
-                          <Copy className="w-3 h-3" />
-                        </button>
-                      </div>
-                    </TableCell>
+                      <TableCell>
+                        <Badge variant="default" className="font-mono">
+                          {ev.format}
+                        </Badge>
+                      </TableCell>
 
-                    <TableCell className="text-right font-mono text-xs text-text-secondary">
-                      {formatBytes(ev.objectSizeBytes)}
-                    </TableCell>
+                      <TableCell className="font-mono text-[11px] text-text-muted">
+                        <div className="flex items-center gap-1">
+                          <span title={ev.objectHash}>{formatHash(ev.objectHash)}</span>
+                          <button
+                            type="button"
+                            onClick={() => copyToClipboard(ev.objectHash, "SHA-256")}
+                            className="text-text-muted hover:text-text-primary p-0.5"
+                            title="Copy full SHA-256 hash"
+                          >
+                            <Copy className="w-3 h-3" />
+                          </button>
+                        </div>
+                      </TableCell>
 
-                    <TableCell className="text-right font-mono text-xs text-text-secondary">
-                      {ev.totalLines ? ev.totalLines.toLocaleString() : "—"}
-                    </TableCell>
+                      <TableCell className="text-right font-mono text-xs text-text-secondary">
+                        {formatBytes(ev.objectSizeBytes)}
+                      </TableCell>
 
-                    <TableCell className="text-center">
-                      <ParserStatusBadge status={ev.parserStatus} />
-                    </TableCell>
+                      <TableCell className="text-right font-mono text-xs">
+                        {result ? (
+                          <div>
+                            <span className="text-status-success font-semibold">
+                              {result.eventsCount.toLocaleString()} events
+                            </span>
+                            <span className="text-[11px] text-text-muted block">
+                              ({result.rawRecordsCount.toLocaleString()} lines)
+                            </span>
+                          </div>
+                        ) : ev.parsedLines !== undefined && ev.parsedLines !== null && ev.parsedLines > 0 ? (
+                          <div>
+                            <span className="text-text-primary font-medium">
+                              {ev.parsedLines.toLocaleString()} events
+                            </span>
+                            {ev.totalLines ? (
+                              <span className="text-[11px] text-text-muted block">
+                                ({ev.totalLines.toLocaleString()} lines)
+                              </span>
+                            ) : null}
+                          </div>
+                        ) : ev.totalLines ? (
+                          <span className="text-text-secondary">
+                            {ev.totalLines.toLocaleString()} lines
+                          </span>
+                        ) : (
+                          <span className="text-text-muted">—</span>
+                        )}
+                      </TableCell>
 
-                    <TableCell className="text-xs text-text-muted font-mono">
-                      {formatDateTime(ev.createdAt)}
-                    </TableCell>
+                      <TableCell className="text-center">
+                        <ParserStatusBadge status={currentStatus} />
+                      </TableCell>
 
-                    <TableCell className="text-center">
-                      <Badge
-                        variant="verified"
-                        icon={<CheckCircle2 className="w-3 h-3 text-status-success" />}
-                      >
-                        VALID
-                      </Badge>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                      <TableCell className="text-xs text-text-muted font-mono">
+                        {formatDateTime(ev.createdAt)}
+                      </TableCell>
+
+                      <TableCell className="text-right">
+                        {isProcessing ? (
+                          <Button size="sm" variant="outline" disabled className="text-xs h-7 gap-1">
+                            <Loader2 className="w-3 h-3 animate-spin text-accent" />
+                            <span>Processing...</span>
+                          </Button>
+                        ) : currentStatus === "PARSED" || currentStatus === "PARTIAL" ? (
+                          <Link to="/events">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-xs h-7 text-accent hover:text-accent-hover gap-1 font-medium"
+                            >
+                              <span>View Events</span>
+                              <ArrowRight className="w-3 h-3" />
+                            </Button>
+                          </Link>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="default"
+                            className="text-xs h-7 gap-1 font-medium"
+                            onClick={() => handleProcess(ev)}
+                          >
+                            <Cpu className="w-3 h-3" />
+                            <span>Process</span>
+                          </Button>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           )}
