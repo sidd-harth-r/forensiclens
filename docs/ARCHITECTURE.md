@@ -912,7 +912,7 @@ Timeline / Session Correlation
 Retrieval (SQL, FTS5, Vector)
 ```
 
-See [`docs/PARSERS.md`](PARSERS.md) for the complete parser subsystem architecture, interface definitions, and OpenSSH normalization rules.
+See [`docs/PARSERS.md`](PARSERS.md) for the complete parser subsystem architecture, interface definitions, OpenSSH normalization rules, and database persistence mechanics (`backend/app/parsers/persistence.py`).
 
 ### Immutability
 

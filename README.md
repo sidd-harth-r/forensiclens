@@ -106,7 +106,7 @@ forensiclens/
 │   │   ├── api/            # REST API endpoints & route handlers
 │   │   ├── cases/          # Case management, lifecycle & metadata
 │   │   ├── evidence/       # Evidence models, indexing & raw storage
-│   │   ├── parsers/        # Pluggable forensic log parsers & registry
+│   │   ├── parsers/        # Pluggable forensic log parsers, registry & persistence
 │   │   ├── ingestion/      # Forensic artifact ingestion orchestration
 │   │   ├── retrieval/      # FTS5 lexical, Chroma dense, RRF & rerankers
 │   │   ├── correlation/    # Timeline reconstruction & session correlation
@@ -173,6 +173,7 @@ ForensicLens is designed specifically for handling sensitive forensic data and e
   - [x] SQLite + FTS5 per-case database foundation & migration integrity.
   - [x] Content-addressed immutable evidence ingestion & SHA-256 validation.
   - [x] Pluggable parser foundation & OpenSSH authentication log parser.
+  - [x] Raw record & normalized event database persistence (ackend/app/parsers/persistence.py).
   - [ ] Additional forensic parsers (syslog, Apache, Windows Event Logs, bash history).
   - [ ] Tamper-evident hash-chained audit logging.
 - [ ] **Phase 2: Hybrid Retrieval & Timeline Correlation**

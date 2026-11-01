@@ -319,36 +319,174 @@ ParseResult
 
 ---
 
-## 7. Testing and Verification
+## 8. Parser Persistence Subsystem (Step 9)
 
-### 7.1 Test Suite Structure
+### 8.1 Architecture and Responsibility
 
-Tests are implemented in [`backend/tests/test_parsers.py`](file:///d:/5th%20sem/forensiclens/backend/tests/test_parsers.py):
+The parser persistence subsystem ([`backend/app/parsers/persistence.py`](file:///d:/5th%20sem/forensiclens/backend/app/parsers/persistence.py)) bridges the gap between memory-resident parser output (`ParseResult`) and the case database (`raw_records`, `events`, `events_fts`, and `evidence_files`).
 
-- **`TestOpenSSHParserAuth`** (7 tests): Validates authentication success, failure, invalid user, publickey with key info, PAM session opened/closed, and disconnects.
-- **`TestOpenSSHTimestampHandling`** (4 tests): Validates BSD timestamp preservation (null UTC), ISO-8601 UTC normalization, timezone offset conversion, and timezone-less handling.
-- **`TestOpenSSHProvenance`** (4 tests): Validates exact raw line preservation, 1-based line numbering, contiguous byte-offset slicing, and metadata attachment.
-- **`TestOpenSSHResilience`** (6 tests): Validates malformed line recovery, partial syslog parsing, missing optional fields (PID, host, port), and empty line handling.
-- **`TestParserRegistry`** (6 tests): Validates lookup by name and format, case-insensitivity, `UnknownParserError` with available list, and custom parser registration.
-- **`TestMultiLineBatch`** (2 tests): Validates multi-line mixed evidence streams and file stream reading.
+```text
+Immutable Evidence (objects/<evidence_id>)
+        ↓
+   BaseParser (OpenSSHParser)
+        ↓
+    ParseResult
+       /          /      RawRecord   ParsedEvent
+   ↓             ↓
+raw_records    events
+                 ↓
+             events_fts (FTS5 lexical index)
+```
 
-### 7.2 Full Verification Results
+Core responsibilities:
+1. **Case-Scoped Operation**: Operates strictly within the boundary of the requested `case_id`. All foreign keys, indexes, and tables are case-isolated in `data/cases/<case_id>/case.db`.
+2. **Provenance & Unmodified Raw Text**: Persists exact source lines into `raw_records` with 1-based `line_number`, 0-based `byte_start`, and exclusive `byte_end`. Never trims, normalizes, or re-encodes `raw_text`.
+3. **Structured Event Mapping**: Maps `ParsedEvent` fields into `events` columns, computing a deterministic SHA-256 `event_hash` over the canonical JSON serialization of event attributes.
+4. **FTS5 Synchronization**: Synchronizes searchable text (`message`, `command_value`, `resource`, `process`, `event_type`, `source`, `host`) to the `events_fts` FTS5 virtual table.
+5. **Evidence Lifecycle Tracking**: Updates `evidence_files` metadata (`parser_version`, `parser_status`, `total_lines`, `parsed_lines`).
+6. **Transactionality & Rollback**: Uses transactional savepoints (`SAVEPOINT sp_persist_<uuid>`) to guarantee all-or-nothing atomicity. If any record fails (e.g. check constraint, disk error, foreign key violation), complete rollback to the savepoint occurs.
+7. **Idempotency & Duplicate Defensibility**: By default (`if_exists='reject'`), prevents duplicate persistence runs for the same evidence file by raising `AlreadyPersistedError`. Optionally supports `if_exists='ignore'` to safely return original counts without mutating records.
+
+### 8.2 Database Schema Mapping
+
+#### Raw Records (`raw_records`)
+| Parser Field (`RawRecord`) | Database Column (`raw_records`) | Description |
+|---|---|---|
+| `f"RAW_{evidence_id}_{record_no}"` | `raw_record_id` | Deterministic primary key |
+| `case_id` | `case_id` | Foreign key referencing `cases` |
+| `evidence_id` | `evidence_id` | Foreign key referencing `evidence_files` |
+| `record.record_no` | `record_no` | Stable 1-based record ordinal |
+| `record.line_number` | `line_number` | 1-based source line number |
+| `record.byte_start` | `byte_start` | 0-based byte start offset |
+| `record.byte_end` | `byte_end` | Exclusive byte end offset |
+| `record.raw_text` | `raw_text` | Untrusted, unmodified raw text |
+| `record.parse_status` | `parse_status` | Status CHECK (`PARSED`, `PARTIAL`, `UNPARSED`) |
+| `record.parse_error` | `parse_error` | Parser diagnostic message or None |
+| `now_utc` | `created_at` | ISO-8601 UTC insert timestamp |
+
+#### Normalized Events (`events`)
+| Parser Field (`ParsedEvent`) | Database Column (`events`) | Description |
+|---|---|---|
+| `f"EVT_{evidence_id}_{record_no}"` | `event_id` | Deterministic primary key |
+| `case_id` | `case_id` | Foreign key referencing `cases` |
+| `evidence_id` | `evidence_id` | Foreign key referencing `evidence_files` |
+| `raw_record_id` | `raw_record_id` | Foreign key referencing `raw_records` |
+| `event.timestamp_utc` | `timestamp_utc` | RFC3339 UTC timestamp or NULL |
+| `event.timestamp_original`| `timestamp_original` | Original raw timestamp string |
+| `event.tz_assumed` | `tz_assumed` | Timezone assumed or NULL |
+| `event.timestamp_confidence` | `timestamp_confidence` | `EXACT` or NULL |
+| `event.source` / parser_name | `source` | "OpenSSH" |
+| `event.host` | `host` | Hostname from syslog header or NULL |
+| `event.event_type` | `event_type` | Canonical event type (e.g. `AUTH_FAILURE`) |
+| `event.severity` | `severity` | Normalized severity (`INFO`, `WARNING`, etc.) |
+| `event.user_value` | `user_value` | Extracted username |
+| `event.src_ip` | `src_ip` | Extracted source IP |
+| `event.src_ip_scope` | `src_ip_scope` | Scope CHECK (`PUBLIC`, `PRIVATE`, etc.) |
+| `event.src_port` | `src_port` | Source port integer |
+| `event.process` | `process` | Process name (e.g. `sshd`) |
+| `event.pid` | `pid` | Process PID integer |
+| `event.command_value` | `command_value` | Command or NULL |
+| `event.resource` | `resource` | Target resource or NULL |
+| `event.message` | `message` | Normalized message text |
+| `event.parse_status` | `parse_status` | Status CHECK (`PARSED`, `PARTIAL`, `UNPARSED`) |
+| `evidence.original_name` | `source_file_name` | Original filename for display |
+| `event.line_number` | `line_number` | 1-based source line number |
+| `event.byte_start` | `byte_start` | Exact byte start offset |
+| `event.byte_end` | `byte_end` | Exclusive byte end offset |
+| `compute_event_hash(...)` | `event_hash` | SHA-256 over canonical JSON event dictionary |
+| `now_utc` | `created_at` | ISO-8601 UTC insert timestamp |
+
+### 8.3 FTS5 Lexical Search Integration
+
+The SQLite FTS5 virtual table `events_fts` uses external content referencing the `events` table:
+```sql
+CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5 (
+    message,
+    command_value,
+    resource,
+    process,
+    event_type,
+    source,
+    host,
+    content = 'events',
+    content_rowid = 'rowid'
+);
+```
+
+During persistence, for every inserted event, its SQLite `rowid` is retrieved and synchronized to `events_fts`:
+```sql
+INSERT INTO events_fts (rowid, message, command_value, resource, process, event_type, source, host)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+```
+This enables sub-millisecond lexical queries across all parsed forensic events using `MATCH 'term'` or field-scoped syntax like `MATCH 'process:sshd'`.
+
+### 8.4 Transaction Boundary and Rollback Behavior
+
+Persistence operations are atomic. A dedicated savepoint is established:
+```sql
+SAVEPOINT sp_persist_<uuid>;
+```
+If an integrity failure, malformed record, or connection error occurs mid-stream:
+1. `ROLLBACK TO SAVEPOINT sp_persist_<uuid>` is executed.
+2. `RELEASE SAVEPOINT sp_persist_<uuid>` clears the savepoint.
+3. The database state reverts to exactly where it was prior to the call: zero partial `raw_records`, zero partial `events`, and zero partial `events_fts` entries.
+4. `evidence_files.parser_status` remains `PENDING`.
+
+### 8.5 Duplicate and Idempotency Policy
+
+In forensic environments, re-running evidence processing must not silently mutate or duplicate official case records:
+- **`if_exists='reject'` (Default)**: Checks if `raw_records` already exist for the `(case_id, evidence_id)` tuple. If present, raises `AlreadyPersistedError`.
+- **`if_exists='ignore'`**: If records already exist, returns a `PersistenceResult` with `persisted=False` and existing record counts without mutating the database.
+- Primary key constraints (`raw_record_id` = `RAW_<evidence_id>_<record_no>`, `event_id` = `EVT_<evidence_id>_<record_no>`) provide a secondary hard constraint preventing duplicate record injection.
+
+### 8.6 Security Controls
+
+1. **Strict SQL Parameterization**: All values (including untrusted raw log strings and error details) are passed via parameterized `?` placeholders. No string formatting or concatenation into SQL is permitted.
+2. **Untrusted Content Sanitization**: Raw log text is treated as passive evidentiary byte sequences. It is never executed, evaluated as shell commands, or used in filesystem path construction.
+3. **Audit and Redaction**: Log text is never logged to application logs or console streams; only metadata (counts, IDs, status) is exposed.
+
+---
+
+## 9. Testing and Verification
+
+### 9.1 Test Suite Structure
+
+Tests are implemented across two suites:
+- [`backend/tests/test_parsers.py`](file:///d:/5th%20sem/forensiclens/backend/tests/test_parsers.py) (29 tests):
+  - **`TestOpenSSHParserAuth`** (7 tests): Validates authentication success, failure, invalid user, publickey with key info, PAM session opened/closed, and disconnects.
+  - **`TestOpenSSHTimestampHandling`** (4 tests): Validates BSD timestamp preservation (null UTC), ISO-8601 UTC normalization, timezone offset conversion, and timezone-less handling.
+  - **`TestOpenSSHProvenance`** (4 tests): Validates exact raw line preservation, 1-based line numbering, contiguous byte-offset slicing, and metadata attachment.
+  - **`TestOpenSSHResilience`** (6 tests): Validates malformed line recovery, partial syslog parsing, missing optional fields (PID, host, port), and empty line handling.
+  - **`TestParserRegistry`** (6 tests): Validates lookup by name and format, case-insensitivity, `UnknownParserError` with available list, and custom parser registration.
+  - **`TestMultiLineBatch`** (2 tests): Validates multi-line mixed evidence streams and file stream reading.
+- [`backend/tests/test_parser_persistence.py`](file:///d:/5th%20sem/forensiclens/backend/tests/test_parser_persistence.py) (17 tests):
+  - **`TestBasicPersistence`** (4 tests): Single raw record + event, multi-line batch, unparsed record without event, and empty parse result.
+  - **`TestProvenancePreservation`** (2 tests): Exact raw text preservation (including quotes/tabs) and byte-slice reconstruction from source.
+  - **`TestEventMapping`** (3 tests): Normalized event fields, SHA-256 event hash, ISO UTC conversion, and BSD syslog unresolved timestamp.
+  - **`TestReferentialIntegrity`** (3 tests): Nonexistent case ID rejection, unknown evidence ID rejection, and cross-case evidence isolation.
+  - **`TestTransactionality`** (1 test): Constraint failure mid-batch causing 100% rollback of raw records, events, and FTS entries.
+  - **`TestIdempotency`** (2 tests): Rejection of duplicate persistence by default, and safe ignore policy.
+  - **`TestFTS5Synchronization`** (1 test): Lexical discovery through FTS5 MATCH on message and process fields.
+  - **`TestEndToEndPipeline`** (1 test): Complete integration from EvidenceService ingestion -> OpenSSHParser -> ParserPersistenceService.
+
+### 9.2 Full Verification Results
 
 Running `pytest -v` across the entire project test suite:
 ```text
-======================= 88 passed, 1 skipped in 11.19s ========================
+====================== 105 passed, 1 skipped in 13.72s =======================
 ```
 - **`test_database.py`**: 39 passed (schema, migrations, foreign keys, FTS5, isolation).
 - **`test_evidence.py`**: 20 passed, 1 skipped (streaming SHA-256, storage, immutability, duplicates, security).
 - **`test_parsers.py`**: 29 passed (parser foundation and OpenSSH parsing).
+- **`test_parser_persistence.py`**: 17 passed (persistence layer, transactions, idempotency, FTS5).
 
 #### Explanation of the Skipped Test
 `test_evidence.py::TestSecurity::test_symlink_input_rejected` is skipped on Windows environments when running without Developer Mode / administrative privileges. On Windows, creating a symbolic link requires `SeCreateSymbolicLinkPrivilege`. The test gracefully detects this limitation via `pytest.skip()` while the symlink security check remains active in production code.
 
 ---
 
-## 8. Known Limitations & Future Scope
+## 10. Known Limitations & Future Scope
 
 1. **Year and Timezone Resolution Deferred**: OpenSSH logs with BSD syslog timestamps do not contain year or timezone information. Normalization to UTC is intentionally deferred to Phase 2 (Timeline and Correlation Engine).
 2. **Initial Parser Scope**: OpenSSH is the initial reference parser. Parsers for Apache, Nginx, Linux auditd, Windows EVTX, and network flow records will be implemented in subsequent milestones using the same `BaseParser` foundation.
-3. **Database Ingestion Hook**: Step 8 provides the parsing engine and data structures. Persisting parsed results into `raw_records` and `events` tables during evidence ingestion will be integrated in the upcoming ingestion pipeline orchestration step.
+3. **Batch Pipeline Orchestration**: Step 9 provides atomic persistence of parsed results into `raw_records` and `events`. Orchestrating batch jobs across multiple files in a case will be addressed in future job queue enhancements.
