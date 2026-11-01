@@ -223,4 +223,142 @@ describe("API Client & Services Tests", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  test("apiClient.get queries events with comprehensive filters and search", async () => {
+    const originalFetch = globalThis.fetch;
+    let requestedUrl = "";
+    try {
+      globalThis.fetch = async (url) => {
+        requestedUrl = String(url);
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ "content-type": "application/json" }),
+          json: async () => ({
+            items: [
+              {
+                eventId: "EVT-001",
+                eventType: "AUTH_FAILURE",
+                severity: "WARNING",
+                userValue: "root",
+                srcIp: "192.168.1.100",
+                message: "Failed password for root",
+              },
+            ],
+            total: 1,
+            page: 1,
+            pageSize: 20,
+            totalPages: 1,
+          }),
+        };
+      };
+
+      const { apiClient } = await import("../src/services/apiClient.ts");
+      const res = await apiClient.get("/api/cases/CASE-ALPHA/events", {
+        page: 1,
+        page_size: 20,
+        search: "root",
+        event_type: "AUTH_FAILURE",
+        severity: "WARNING",
+        user: "root",
+        src_ip: "192.168.1.100",
+        from: "2026-01-15T10:00:00",
+        to: "2026-01-15T11:00:00",
+      });
+
+      assert.ok(requestedUrl.includes("/api/cases/CASE-ALPHA/events"));
+      assert.ok(requestedUrl.includes("search=root"));
+      assert.ok(requestedUrl.includes("event_type=AUTH_FAILURE"));
+      assert.ok(requestedUrl.includes("severity=WARNING"));
+      assert.ok(requestedUrl.includes("user=root"));
+      assert.ok(requestedUrl.includes("src_ip=192.168.1.100"));
+      assert.ok(requestedUrl.includes("from=2026-01-15T10%3A00%3A00"));
+      assert.ok(requestedUrl.includes("to=2026-01-15T11%3A00%3A00"));
+      assert.equal(res.total, 1);
+      assert.equal(res.items[0].eventId, "EVT-001");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("apiClient.get retrieves single event detail with raw evidence text and provenance", async () => {
+    const originalFetch = globalThis.fetch;
+    let requestedUrl = "";
+    try {
+      globalThis.fetch = async (url) => {
+        requestedUrl = String(url);
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ "content-type": "application/json" }),
+          json: async () => ({
+            eventId: "EVT-001",
+            caseId: "CASE-ALPHA",
+            evidenceId: "EV_ALPHA_1",
+            rawRecordId: "RAW_ALPHA_1",
+            eventType: "AUTH_FAILURE",
+            severity: "WARNING",
+            userValue: "root",
+            srcIp: "192.168.1.100",
+            message: "Failed password for root",
+            lineNumber: 42,
+            byteStart: 1024,
+            byteEnd: 1100,
+            eventHash: "a1b2c3d4e5f6...",
+            rawText: "Jan 15 10:20:30 server sshd[1234]: Failed password for root",
+            evidenceOriginalName: "auth.log",
+            evidenceFormat: "OPENSSH",
+            recordNo: 42,
+          }),
+        };
+      };
+
+      const { apiClient } = await import("../src/services/apiClient.ts");
+      const res = await apiClient.get("/api/cases/CASE-ALPHA/events/EVT-001");
+
+      assert.ok(requestedUrl.includes("/api/cases/CASE-ALPHA/events/EVT-001"));
+      assert.equal(res.eventId, "EVT-001");
+      assert.equal(res.rawText, "Jan 15 10:20:30 server sshd[1234]: Failed password for root");
+      assert.equal(res.evidenceOriginalName, "auth.log");
+      assert.equal(res.evidenceFormat, "OPENSSH");
+      assert.equal(res.lineNumber, 42);
+      assert.equal(res.byteStart, 1024);
+      assert.equal(res.byteEnd, 1100);
+      assert.ok(res.eventHash);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("apiClient.get handles 404 for nonexistent event ID", async () => {
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async () => {
+        return {
+          ok: false,
+          status: 404,
+          headers: new Headers({ "content-type": "application/json" }),
+          json: async () => ({
+            detail: "Forensic event 'EVT_MISSING' not found in case 'CASE-ALPHA'.",
+          }),
+        };
+      };
+
+      const { apiClient, ApiError } = await import("../src/services/apiClient.ts");
+
+      await assert.rejects(
+        async () => {
+          await apiClient.get("/api/cases/CASE-ALPHA/events/EVT_MISSING");
+        },
+        (err) => {
+          assert.ok(err instanceof ApiError);
+          assert.equal(err.status, 404);
+          assert.ok(err.message.includes("not found in case 'CASE-ALPHA'"));
+          return true;
+        }
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });

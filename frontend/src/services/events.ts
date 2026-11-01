@@ -23,6 +23,8 @@ export async function getEvents(
     if (params?.search) query.search = params.search;
     if (params?.eventType && params.eventType !== "ALL") query.event_type = params.eventType;
     if (params?.severity && params.severity !== "ALL") query.severity = params.severity;
+    if (params?.user && params.user !== "ALL") query.user = params.user;
+    if (params?.srcIp && params.srcIp !== "ALL") query.src_ip = params.srcIp;
     if (params?.from) query.from = params.from;
     if (params?.to) query.to = params.to;
 
@@ -44,6 +46,27 @@ export async function getEvents(
 
   if (params?.severity && params.severity !== "ALL") {
     filtered = filtered.filter((e) => e.severity === params.severity);
+  }
+
+  if (params?.user && params.user.trim() && params.user !== "ALL") {
+    const u = params.user.toLowerCase();
+    filtered = filtered.filter((e) => e.userValue && e.userValue.toLowerCase().includes(u));
+  }
+
+  if (params?.srcIp && params.srcIp.trim() && params.srcIp !== "ALL") {
+    filtered = filtered.filter((e) => e.srcIp && e.srcIp.includes(params.srcIp!));
+  }
+
+  if (params?.from) {
+    filtered = filtered.filter(
+      (e) => (e.timestampUtc || e.timestampOriginal || "") >= params.from!
+    );
+  }
+
+  if (params?.to) {
+    filtered = filtered.filter(
+      (e) => (e.timestampUtc || e.timestampOriginal || "") <= params.to!
+    );
   }
 
   if (params?.search && params.search.trim()) {
@@ -94,5 +117,20 @@ export async function getEventById(
   const found = FIXTURE_EVENTS.find(
     (e) => e.eventId === eventId && (!caseId || e.caseId === caseId)
   );
-  return Promise.resolve(found ? { ...found } : null);
+
+  if (found) {
+    return Promise.resolve({
+      ...found,
+      rawText:
+        found.rawText ||
+        `${found.timestampOriginal || "Jan 15 10:20:30"} ${found.host || "server"} ${
+          found.process || "sshd"
+        }[${found.pid || 1234}]: ${found.message}`,
+      evidenceOriginalName: found.evidenceOriginalName || found.sourceFileName || "auth.log",
+      evidenceFormat: found.evidenceFormat || "OPENSSH",
+      recordNo: found.recordNo || found.lineNumber || 1,
+    });
+  }
+
+  return Promise.resolve(null);
 }

@@ -367,6 +367,63 @@ def test_events_filter_severity(api_test_data):
         close_case_db(conn_1)
 
 
+def test_events_filter_user(api_test_data):
+    conn_1 = open_case_db(api_test_data["case_1_db"])
+    try:
+        res_hacker = list_case_events(
+            api_test_data["case_1_id"],
+            user="hacker",
+            conn=conn_1,
+        )
+        assert res_hacker.total == 1
+        assert res_hacker.items[0].userValue == "hacker"
+
+        res_none = list_case_events(
+            api_test_data["case_1_id"],
+            user="nonexistent_user",
+            conn=conn_1,
+        )
+        assert res_none.total == 0
+    finally:
+        close_case_db(conn_1)
+
+
+def test_events_filter_src_ip(api_test_data):
+    conn_1 = open_case_db(api_test_data["case_1_db"])
+    try:
+        res_ip = list_case_events(
+            api_test_data["case_1_id"],
+            src_ip="192.168.1.100",
+            conn=conn_1,
+        )
+        assert res_ip.total == 1
+        assert res_ip.items[0].srcIp == "192.168.1.100"
+
+        res_none = list_case_events(
+            api_test_data["case_1_id"],
+            src_ip="203.0.113.99",
+            conn=conn_1,
+        )
+        assert res_none.total == 0
+    finally:
+        close_case_db(conn_1)
+
+
+def test_events_filter_time_range(api_test_data):
+    conn_1 = open_case_db(api_test_data["case_1_db"])
+    try:
+        res_window = list_case_events(
+            api_test_data["case_1_id"],
+            from_time="Jan 15 10:20:00",
+            to_time="Jan 15 10:20:45",
+            conn=conn_1,
+        )
+        assert res_window.total == 1
+        assert res_window.items[0].timestampOriginal == "Jan 15 10:20:30"
+    finally:
+        close_case_db(conn_1)
+
+
 def test_events_search_fts5_and_like(api_test_data):
     conn_1 = open_case_db(api_test_data["case_1_db"])
     try:
@@ -416,6 +473,14 @@ def test_get_case_event_by_id_success(api_test_data):
         assert ev.lineNumber is not None
         assert ev.byteStart is not None
         assert ev.byteEnd is not None
+        # Provenance and raw evidence line checks
+        assert ev.evidenceId == api_test_data["evidence_id"]
+        assert ev.rawRecordId is not None
+        assert ev.recordNo is not None
+        assert ev.rawText is not None
+        assert "sshd" in ev.rawText
+        assert ev.evidenceOriginalName == "auth.log"
+        assert ev.evidenceFormat == "OPENSSH"
     finally:
         close_case_db(conn_1)
 

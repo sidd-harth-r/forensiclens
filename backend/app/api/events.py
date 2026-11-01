@@ -27,6 +27,7 @@ class ForensicEventResponse(BaseModel):
     timestampUtc: Optional[str] = None
     timestampOriginal: Optional[str] = None
     timestampConfidence: Optional[str] = None
+    tzAssumed: Optional[str] = None
     source: str
     host: Optional[str] = None
     eventType: str
@@ -47,6 +48,12 @@ class ForensicEventResponse(BaseModel):
     byteEnd: Optional[int] = None
     eventHash: str
     createdAt: str
+    # Provenance and detail extensions
+    rawText: Optional[str] = None
+    evidenceOriginalName: Optional[str] = None
+    evidenceFormat: Optional[str] = None
+    recordNo: Optional[int] = None
+    parseError: Optional[str] = None
 
 
 class PaginatedEventsResponse(BaseModel):
@@ -58,7 +65,19 @@ class PaginatedEventsResponse(BaseModel):
 
 
 def _row_to_event_response(row: sqlite3.Row) -> ForensicEventResponse:
-    """Map database Row to ForensicEventResponse model."""
+    """Map database Row to ForensicEventResponse model with optional joined provenance fields."""
+    keys = row.keys()
+    raw_text = row["raw_text"] if "raw_text" in keys else None
+    evidence_orig_name = (
+        row["evidence_original_name"]
+        if "evidence_original_name" in keys and row["evidence_original_name"]
+        else (row["source_file_name"] if "source_file_name" in keys else None)
+    )
+    evidence_format = row["evidence_format"] if "evidence_format" in keys else None
+    record_no = row["record_no"] if "record_no" in keys else None
+    parse_error = row["parse_error"] if "parse_error" in keys else None
+    tz_assumed = row["tz_assumed"] if "tz_assumed" in keys else None
+
     return ForensicEventResponse(
         eventId=row["event_id"],
         caseId=row["case_id"],
@@ -67,6 +86,7 @@ def _row_to_event_response(row: sqlite3.Row) -> ForensicEventResponse:
         timestampUtc=row["timestamp_utc"],
         timestampOriginal=row["timestamp_original"],
         timestampConfidence=row["timestamp_confidence"],
+        tzAssumed=tz_assumed,
         source=row["source"] or "UNKNOWN",
         host=row["host"],
         eventType=row["event_type"],
@@ -87,6 +107,11 @@ def _row_to_event_response(row: sqlite3.Row) -> ForensicEventResponse:
         byteEnd=row["byte_end"],
         eventHash=row["event_hash"],
         createdAt=row["created_at"],
+        rawText=raw_text,
+        evidenceOriginalName=evidence_orig_name,
+        evidenceFormat=evidence_format,
+        recordNo=record_no,
+        parseError=parse_error,
     )
 
 
@@ -98,6 +123,8 @@ def list_case_events(
     search: Optional[str] = Query(default=None, description="Lexical search query"),
     event_type: Optional[str] = Query(default=None, description="Filter by event type"),
     severity: Optional[str] = Query(default=None, description="Filter by severity level"),
+    user: Optional[str] = Query(default=None, description="Filter by username"),
+    src_ip: Optional[str] = Query(default=None, description="Filter by source IP address"),
     from_time: Optional[str] = Query(default=None, alias="from", description="ISO start timestamp"),
     to_time: Optional[str] = Query(default=None, alias="to", description="ISO end timestamp"),
     conn: sqlite3.Connection = Depends(get_case_connection),
@@ -118,6 +145,10 @@ def list_case_events(
         event_type = None
     if not isinstance(severity, str):
         severity = None
+    if not isinstance(user, str):
+        user = None
+    if not isinstance(src_ip, str):
+        src_ip = None
     if not isinstance(from_time, str):
         from_time = None
     if not isinstance(to_time, str):
@@ -140,6 +171,20 @@ def list_case_events(
         params.append(severity)
         fallback_conditions.append("events.severity = ?")
         fallback_params.append(severity)
+
+    if user and user.strip() and user.upper() != "ALL":
+        clean_user = user.strip()
+        conditions.append("events.user_value = ?")
+        params.append(clean_user)
+        fallback_conditions.append("events.user_value = ?")
+        fallback_params.append(clean_user)
+
+    if src_ip and src_ip.strip() and src_ip.upper() != "ALL":
+        clean_ip = src_ip.strip()
+        conditions.append("events.src_ip = ?")
+        params.append(clean_ip)
+        fallback_conditions.append("events.src_ip = ?")
+        fallback_params.append(clean_ip)
 
     if from_time:
         cond = "(events.timestamp_utc >= ? OR events.timestamp_original >= ?)"
@@ -247,10 +292,22 @@ def get_case_event_by_id(
     event_id: str,
     conn: sqlite3.Connection = Depends(get_case_connection),
 ) -> ForensicEventResponse:
-    """Retrieve full forensic details and byte-level provenance for a single event."""
+    """Retrieve full forensic details, byte-level provenance, and exact raw text for a single event."""
     validate_identifier(event_id, "event_id")
     row = conn.execute(
-        "SELECT * FROM events WHERE case_id = ? AND event_id = ?",
+        """
+        SELECT 
+            events.*,
+            raw_records.raw_text,
+            raw_records.record_no,
+            raw_records.parse_error,
+            evidence_files.original_name AS evidence_original_name,
+            evidence_files.format AS evidence_format
+        FROM events
+        LEFT JOIN raw_records ON events.raw_record_id = raw_records.raw_record_id AND events.case_id = raw_records.case_id
+        LEFT JOIN evidence_files ON events.evidence_id = evidence_files.evidence_id AND events.case_id = evidence_files.case_id
+        WHERE events.case_id = ? AND events.event_id = ?
+        """,
         (case_id, event_id),
     ).fetchone()
 

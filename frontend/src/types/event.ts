@@ -8,10 +8,11 @@ export interface ForensicEvent {
   eventId: string;
   caseId: string;
   evidenceId: string;
-  rawRecordId?: string;
+  rawRecordId?: string | null;
   timestampUtc?: string | null;
   timestampOriginal?: string | null;
   timestampConfidence?: "EXACT" | "INFERRED_YEAR" | "INFERRED_TZ" | null;
+  tzAssumed?: string | null;
   source: string;
   host?: string | null;
   eventType: string;
@@ -26,12 +27,18 @@ export interface ForensicEvent {
   resource?: string | null;
   message: string;
   parseStatus: EventParseStatus;
-  sourceFileName?: string;
-  lineNumber?: number;
-  byteStart?: number;
-  byteEnd?: number;
+  sourceFileName?: string | null;
+  lineNumber?: number | null;
+  byteStart?: number | null;
+  byteEnd?: number | null;
   eventHash: string;
   createdAt: string;
+  // Provenance & Detail extensions
+  rawText?: string | null;
+  evidenceOriginalName?: string | null;
+  evidenceFormat?: string | null;
+  recordNo?: number | null;
+  parseError?: string | null;
 }
 
 export interface EventQueryParams {
@@ -40,6 +47,8 @@ export interface EventQueryParams {
   search?: string;
   eventType?: string;
   severity?: string;
+  user?: string;
+  srcIp?: string;
   from?: string;
   to?: string;
 }
