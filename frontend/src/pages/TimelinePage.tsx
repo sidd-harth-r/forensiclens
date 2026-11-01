@@ -25,7 +25,8 @@ export function TimelinePage() {
     getEvents(currentCase?.caseId).then((res) => {
       if (mounted) {
         // Sort chronologically
-        const sorted = [...res].sort((a, b) => {
+        const rawItems = Array.isArray(res) ? res : res.items;
+        const sorted = [...rawItems].sort((a, b) => {
           const tA = a.timestampUtc || a.timestampOriginal || "";
           const tB = b.timestampUtc || b.timestampOriginal || "";
           return tA.localeCompare(tB);

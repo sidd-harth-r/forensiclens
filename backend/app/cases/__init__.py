@@ -18,6 +18,11 @@ from app.cases.database import (
     run_migrations,
     verify_schema,
 )
+from app.cases.service import (
+    create_case,
+    get_case,
+    list_cases,
+)
 
 __all__ = [
     "DatabaseError",
@@ -25,9 +30,12 @@ __all__ = [
     "MigrationError",
     "SchemaValidationError",
     "close_case_db",
+    "create_case",
+    "get_case",
     "get_case_db_path",
     "initialize_case_db",
     "initialize_legal_kb",
+    "list_cases",
     "open_case_db",
     "run_migrations",
     "verify_schema",

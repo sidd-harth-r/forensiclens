@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useParams, Link } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Card, CardContent } from "@/components/ui/Card";
@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { LoadingState } from "@/components/common/LoadingState";
 import { EmptyState } from "@/components/common/EmptyState";
+import { ErrorState } from "@/components/common/ErrorState";
 import { getCaseById } from "@/services/cases";
 import { useCase } from "@/context/CaseContext";
 import { Case } from "@/types/case";
@@ -29,18 +30,45 @@ export function CaseDetailPage() {
   const { selectedCaseId, setSelectedCaseId } = useCase();
   const [caseItem, setCaseItem] = useState<Case | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (caseId) {
-      getCaseById(caseId).then((res) => {
-        setCaseItem(res);
-        setLoading(false);
-      });
+  const loadCase = useCallback(async () => {
+    if (!caseId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await getCaseById(caseId);
+      setCaseItem(res);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load case profile");
+    } finally {
+      setLoading(false);
     }
   }, [caseId]);
 
+  useEffect(() => {
+    loadCase();
+  }, [loadCase]);
+
   if (loading) {
     return <LoadingState message="Loading case profile..." />;
+  }
+
+  if (error) {
+    return (
+      <div className="space-y-4">
+        <Link to="/cases">
+          <Button variant="ghost" size="sm">
+            <ArrowLeft className="w-3.5 h-3.5 mr-1" /> Back to Cases
+          </Button>
+        </Link>
+        <ErrorState
+          title="Error Loading Case Profile"
+          message={error}
+          onRetry={loadCase}
+        />
+      </div>
+    );
   }
 
   if (!caseItem) {
@@ -83,7 +111,7 @@ export function CaseDetailPage() {
 
       <PageHeader
         title={`${caseItem.caseId}: ${caseItem.name}`}
-        description={caseItem.description}
+        description={caseItem.description || "No description recorded."}
         actions={
           <Badge
             variant={caseItem.status === "OPEN" ? "verified" : "neutral"}
@@ -135,7 +163,7 @@ export function CaseDetailPage() {
               <FileText className="w-3.5 h-3.5 text-purple-500" /> Database File
             </div>
             <div className="text-xs font-mono text-text-primary truncate mt-1">
-              case.db (SQLCipher)
+              case.db (SQLCipher / SQLite)
             </div>
           </CardContent>
         </Card>

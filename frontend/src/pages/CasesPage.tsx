@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import React, { useState, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { useCase } from "@/context/CaseContext";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -15,13 +15,25 @@ import {
   TableRow,
 } from "@/components/ui/Table";
 import { EmptyState } from "@/components/common/EmptyState";
+import { LoadingState } from "@/components/common/LoadingState";
+import { ErrorState } from "@/components/common/ErrorState";
 import { formatDateTime } from "@/lib/formatters";
-import { Search, FolderKanban, Check, Filter } from "lucide-react";
+import { createCase } from "@/services/cases";
+import { Search, FolderKanban, Check, Filter, Plus, X } from "lucide-react";
+import { toast } from "sonner";
 
 export function CasesPage() {
-  const { cases, selectedCaseId, setSelectedCaseId } = useCase();
+  const { cases, selectedCaseId, setSelectedCaseId, isLoading, error, refreshCases } = useCase();
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("ALL");
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Form fields
+  const [newCaseId, setNewCaseId] = useState("");
+  const [newCaseName, setNewCaseName] = useState("");
+  const [newCaseDescription, setNewCaseDescription] = useState("");
+  const [newLeadInvestigator, setNewLeadInvestigator] = useState("Lead Analyst");
 
   const filteredCases = useMemo(() => {
     return cases.filter((c) => {
@@ -34,14 +46,68 @@ export function CasesPage() {
     });
   }, [cases, searchTerm, statusFilter]);
 
+  const handleCreateCase = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newCaseName.trim()) {
+      toast.error("Case name is required");
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const created = await createCase({
+        caseId: newCaseId.trim() || undefined,
+        name: newCaseName.trim(),
+        description: newCaseDescription.trim() || undefined,
+        leadInvestigator: newLeadInvestigator.trim() || undefined,
+      });
+
+      toast.success(`Case ${created.caseId} initialized successfully`);
+      setShowCreateModal(false);
+      setNewCaseId("");
+      setNewCaseName("");
+      setNewCaseDescription("");
+      await refreshCases();
+      setSelectedCaseId(created.caseId);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to create forensic case");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  if (isLoading) {
+    return <LoadingState message="Loading forensic case repository..." />;
+  }
+
+  if (error) {
+    return (
+      <div className="space-y-4">
+        <PageHeader
+          title="Case Repository"
+          description="Forensic investigation workspaces."
+        />
+        <ErrorState
+          title="Failed to Load Cases"
+          message={error}
+          onRetry={refreshCases}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-5">
       <PageHeader
         title="Case Repository"
         description="Forensic investigation workspaces. Each case operates with isolated databases, cryptographic vaults, and immutable evidence directories."
         actions={
-          <Button variant="default" size="sm" disabled title="Case creation will connect to backend API in Phase 1">
-            + New Forensic Case
+          <Button
+            variant="default"
+            size="sm"
+            onClick={() => setShowCreateModal(true)}
+          >
+            <Plus className="w-3.5 h-3.5 mr-1" /> New Forensic Case
           </Button>
         }
       />
@@ -92,12 +158,16 @@ export function CasesPage() {
                 description={
                   searchTerm
                     ? `No cases match the query "${searchTerm}". Try resetting search or status filters.`
-                    : "No cases exist matching the selected criteria."
+                    : "No forensic cases currently exist in the repository."
                 }
-                actionLabel="Reset Filters"
+                actionLabel={searchTerm ? "Reset Filters" : "+ Create Case"}
                 onAction={() => {
-                  setSearchTerm("");
-                  setStatusFilter("ALL");
+                  if (searchTerm) {
+                    setSearchTerm("");
+                    setStatusFilter("ALL");
+                  } else {
+                    setShowCreateModal(true);
+                  }
                 }}
               />
             </div>
@@ -106,7 +176,7 @@ export function CasesPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-12 text-center">Active</TableHead>
-                  <TableHead className="w-32">Case ID</TableHead>
+                  <TableHead className="w-36">Case ID</TableHead>
                   <TableHead>Investigation Name</TableHead>
                   <TableHead className="w-24">Status</TableHead>
                   <TableHead className="w-24 text-right">Evidence</TableHead>
@@ -147,7 +217,7 @@ export function CasesPage() {
                       <TableCell>
                         <div className="font-semibold text-xs text-text-primary">{c.name}</div>
                         <div className="text-[11px] text-text-muted line-clamp-1 mt-0.5">
-                          {c.description}
+                          {c.description || "No description provided."}
                         </div>
                       </TableCell>
                       <TableCell>
@@ -187,6 +257,94 @@ export function CasesPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Create Case Modal */}
+      {showCreateModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+          <div className="bg-surface border border-border rounded-lg max-w-md w-full p-5 space-y-4 shadow-xl">
+            <div className="flex items-center justify-between border-b border-border pb-3">
+              <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2">
+                <FolderKanban className="w-4 h-4 text-accent" />
+                Initialize Forensic Case
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowCreateModal(false)}
+                className="text-text-muted hover:text-text-primary"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateCase} className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-text-secondary mb-1">
+                  Investigation Title *
+                </label>
+                <Input
+                  required
+                  placeholder="e.g. Unauthorized Lateral Movement Audit"
+                  value={newCaseName}
+                  onChange={(e) => setNewCaseName(e.target.value)}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-text-secondary mb-1">
+                  Case ID (Optional, auto-generated if blank)
+                </label>
+                <Input
+                  placeholder="e.g. CASE-2026-001"
+                  value={newCaseId}
+                  onChange={(e) => setNewCaseId(e.target.value)}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-text-secondary mb-1">
+                  Description
+                </label>
+                <textarea
+                  className="w-full text-xs rounded border border-border bg-surface-subtle p-2 text-text-primary focus:outline-none focus:ring-1 focus:ring-accent resize-none h-20"
+                  placeholder="Incident scope, background, or forensic objectives..."
+                  value={newCaseDescription}
+                  onChange={(e) => setNewCaseDescription(e.target.value)}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-text-secondary mb-1">
+                  Lead Examiner
+                </label>
+                <Input
+                  value={newLeadInvestigator}
+                  onChange={(e) => setNewLeadInvestigator(e.target.value)}
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowCreateModal(false)}
+                  disabled={isSubmitting}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  variant="default"
+                  size="sm"
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? "Initializing..." : "Create Case Workspace"}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

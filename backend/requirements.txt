@@ -12,11 +12,13 @@ opentelemetry-api==1.45.2
 pydantic==2.14.2
 pydantic_core==2.50.2
 starlette==1.7.0
+python-multipart==0.0.32
 typing-inspection==0.4.4
 typing_extensions==4.16.0
 uvicorn==0.54.0
 
 # Testing
+httpx==0.28.1
 iniconfig==2.3.1
 packaging==26.3
 pluggy==1.7.0

@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { useCase } from "@/context/CaseContext";
 import { useTheme } from "@/context/ThemeContext";
 import { OfflineIndicator } from "@/components/common/OfflineIndicator";
+import { DataModeBadge } from "@/components/common/DataModeBadge";
 import {
   FolderKanban,
   ChevronDown,
@@ -140,8 +141,9 @@ export function TopNav({ onToggleSidebar }: TopNavProps) {
         </div>
       </div>
 
-      {/* Right: Offline status, Theme toggle, Lead analyst */}
+      {/* Right: Offline status, Data mode, Theme toggle, Lead analyst */}
       <div className="flex items-center gap-3">
+        <DataModeBadge />
         <OfflineIndicator />
 
         <div className="h-4 w-[1px] bg-border hidden sm:block" />

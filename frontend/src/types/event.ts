@@ -34,3 +34,21 @@ export interface ForensicEvent {
   createdAt: string;
 }
 
+export interface EventQueryParams {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  eventType?: string;
+  severity?: string;
+  from?: string;
+  to?: string;
+}
+
+export interface PaginatedEvents {
+  items: ForensicEvent[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
