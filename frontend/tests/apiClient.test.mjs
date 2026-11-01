@@ -361,4 +361,172 @@ describe("API Client & Services Tests", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  test("apiClient.get queries timeline with chronological ordering and filters", async () => {
+    const originalFetch = globalThis.fetch;
+    let requestedUrl = "";
+    try {
+      globalThis.fetch = async (url) => {
+        requestedUrl = String(url);
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ "content-type": "application/json" }),
+          json: async () => ({
+            items: [
+              {
+                eventId: "EVT-001",
+                timestamp: "2024-01-15T10:00:00Z",
+                timestampOriginal: "Jan 15 10:00:00",
+                eventType: "AUTH_SUCCESS",
+                severity: "INFO",
+                user: "admin",
+                srcIp: "192.168.1.100",
+                message: "Accepted password for admin",
+                evidenceId: "EVD-001",
+                recordNo: 1,
+              },
+            ],
+            total: 1,
+            page: 1,
+            pageSize: 50,
+            totalPages: 1,
+          }),
+        };
+      };
+
+      const { apiClient } = await import("../src/services/apiClient.ts");
+      const res = await apiClient.get("/api/cases/CASE-ALPHA/timeline", {
+        event_type: "AUTH_SUCCESS",
+        user: "admin",
+        src_ip: "192.168.1.100",
+        page: 1,
+        page_size: 50,
+      });
+
+      assert.ok(requestedUrl.includes("/api/cases/CASE-ALPHA/timeline"));
+      assert.ok(requestedUrl.includes("event_type=AUTH_SUCCESS"));
+      assert.ok(requestedUrl.includes("user=admin"));
+      assert.ok(requestedUrl.includes("src_ip=192.168.1.100"));
+      assert.equal(res.items.length, 1);
+      assert.equal(res.items[0].eventType, "AUTH_SUCCESS");
+      assert.equal(res.items[0].user, "admin");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("apiClient.get queries reconstructed sessions with filters", async () => {
+    const originalFetch = globalThis.fetch;
+    let requestedUrl = "";
+    try {
+      globalThis.fetch = async (url) => {
+        requestedUrl = String(url);
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ "content-type": "application/json" }),
+          json: async () => ({
+            items: [
+              {
+                sessionId: "SES_CASE-ALPHA_001",
+                user: "admin",
+                srcIp: "192.168.1.100",
+                status: "CLOSED",
+                startTime: "2024-01-15T10:00:00Z",
+                endTime: "2024-01-15T10:05:00Z",
+                durationSeconds: 300,
+                eventCount: 4,
+                correlationBasis: ["MATCHING_USER", "MATCHING_SRC_IP", "TEMPORAL_PROXIMITY_300S"],
+                events: [],
+              },
+            ],
+            total: 1,
+            page: 1,
+            pageSize: 20,
+            totalPages: 1,
+          }),
+        };
+      };
+
+      const { apiClient } = await import("../src/services/apiClient.ts");
+      const res = await apiClient.get("/api/cases/CASE-ALPHA/sessions", {
+        status: "CLOSED",
+        gap_seconds: 300,
+        page: 1,
+        page_size: 20,
+      });
+
+      assert.ok(requestedUrl.includes("/api/cases/CASE-ALPHA/sessions"));
+      assert.ok(requestedUrl.includes("status=CLOSED"));
+      assert.ok(requestedUrl.includes("gap_seconds=300"));
+      assert.equal(res.items.length, 1);
+      assert.equal(res.items[0].sessionId, "SES_CASE-ALPHA_001");
+      assert.equal(res.items[0].status, "CLOSED");
+      assert.deepEqual(res.items[0].correlationBasis, ["MATCHING_USER", "MATCHING_SRC_IP", "TEMPORAL_PROXIMITY_300S"]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("apiClient.get retrieves single session detail with event sequence", async () => {
+    const originalFetch = globalThis.fetch;
+    let requestedUrl = "";
+    try {
+      globalThis.fetch = async (url) => {
+        requestedUrl = String(url);
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ "content-type": "application/json" }),
+          json: async () => ({
+            sessionId: "SES_CASE-ALPHA_001",
+            user: "admin",
+            srcIp: "192.168.1.100",
+            status: "CLOSED",
+            startTime: "2024-01-15T10:00:00Z",
+            endTime: "2024-01-15T10:05:00Z",
+            durationSeconds: 300,
+            eventCount: 2,
+            correlationBasis: ["MATCHING_USER", "MATCHING_SRC_IP"],
+            events: [
+              {
+                eventId: "EVT-001",
+                timestamp: "2024-01-15T10:00:00Z",
+                eventType: "AUTH_SUCCESS",
+                severity: "INFO",
+                user: "admin",
+                srcIp: "192.168.1.100",
+                message: "Accepted password for admin",
+                evidenceId: "EVD-001",
+                recordNo: 1,
+              },
+              {
+                eventId: "EVT-002",
+                timestamp: "2024-01-15T10:05:00Z",
+                eventType: "SESSION_CLOSED",
+                severity: "INFO",
+                user: "admin",
+                srcIp: "192.168.1.100",
+                message: "session closed for user admin",
+                evidenceId: "EVD-001",
+                recordNo: 2,
+              },
+            ],
+          }),
+        };
+      };
+
+      const { apiClient } = await import("../src/services/apiClient.ts");
+      const res = await apiClient.get("/api/cases/CASE-ALPHA/sessions/SES_CASE-ALPHA_001");
+
+      assert.ok(requestedUrl.includes("/api/cases/CASE-ALPHA/sessions/SES_CASE-ALPHA_001"));
+      assert.equal(res.sessionId, "SES_CASE-ALPHA_001");
+      assert.equal(res.events.length, 2);
+      assert.equal(res.events[0].eventType, "AUTH_SUCCESS");
+      assert.equal(res.events[1].eventType, "SESSION_CLOSED");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });

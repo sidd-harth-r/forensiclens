@@ -51,6 +51,19 @@ All endpoints follow the `/api/...` convention and enforce strict per-case SQLit
 | `GET` | `/api/cases/{case_id}/events` | Query normalized events (FTS5 search, type, severity, user, IP, time window, pagination) |
 | `GET` | `/api/cases/{case_id}/events/{event_id}` | Retrieve event details with provenance trace and exact raw evidence text |
 
+### Timeline
+
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/api/cases/{case_id}/timeline` | Retrieve chronological forensic timeline with deterministic ordering, bounded pagination, and filters |
+
+### Sessions
+
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/api/cases/{case_id}/sessions` | Reconstruct and list forensic authentication sessions (temporal proximity, lifecycle boundaries, IP/user correlation) |
+| `GET` | `/api/cases/{case_id}/sessions/{session_id}` | Retrieve reconstructed session details with ordered event sequence and correlation basis |
+
 ---
 
 ## Running Backend and Frontend Together
@@ -123,4 +136,19 @@ curl -X GET "http://127.0.0.1:8000/api/cases/CASE-2026-001/events?search=hacker&
 ### Inspect Event Detail & Provenance
 ```bash
 curl -X GET "http://127.0.0.1:8000/api/cases/CASE-2026-001/events/EVT_EV_4A2B9F3E1C78495A_1"
+```
+
+### Query Timeline
+```bash
+curl -X GET "http://127.0.0.1:8000/api/cases/CASE-2026-001/timeline?event_type=AUTH_SUCCESS&user=admin&page=1&page_size=50"
+```
+
+### Reconstruct Sessions
+```bash
+curl -X GET "http://127.0.0.1:8000/api/cases/CASE-2026-001/sessions?status=CLOSED&gap_seconds=300&page=1&page_size=20"
+```
+
+### Inspect Reconstructed Session
+```bash
+curl -X GET "http://127.0.0.1:8000/api/cases/CASE-2026-001/sessions/SES_CASE-2026-001_001"
 ```

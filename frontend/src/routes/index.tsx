@@ -6,6 +6,7 @@ import { CaseDetailPage } from "@/pages/CaseDetailPage";
 import { EvidencePage } from "@/pages/EvidencePage";
 import { EventsPage } from "@/pages/EventsPage";
 import { TimelinePage } from "@/pages/TimelinePage";
+import { SessionsPage } from "@/pages/SessionsPage";
 import { InvestigationPage } from "@/pages/InvestigationPage";
 import { FindingsPage } from "@/pages/FindingsPage";
 import { LegalPage } from "@/pages/LegalPage";
@@ -44,6 +45,10 @@ export const router = createBrowserRouter([
       {
         path: "timeline",
         element: <TimelinePage />,
+      },
+      {
+        path: "sessions",
+        element: <SessionsPage />,
       },
       {
         path: "investigation",

@@ -7,6 +7,7 @@ import {
   HardDrive,
   ListOrdered,
   Clock,
+  Layers,
   Search,
   CheckCircle2,
   Scale,
@@ -40,6 +41,7 @@ const NAV_ITEMS: NavItem[] = [
     badgeCount: (c) => c?.eventsCount,
   },
   { label: "Timeline", to: "/timeline", icon: Clock },
+  { label: "Sessions", to: "/sessions", icon: Layers },
   {
     label: "Investigation",
     to: "/investigation",
