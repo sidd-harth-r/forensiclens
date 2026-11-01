@@ -894,6 +894,26 @@ evidence_hash
 
 Byte offsets are required so the viewer can return the exact raw record despite CRLF differences or encoding transformations.
 
+### Parser and Event Processing Pipeline
+
+The ingestion and normalization flow guarantees bit-level traceability from raw evidence through retrieval:
+
+```text
+Evidence Ingestion (objects/<evidence_id>)
+        ↓
+Parser Selection (ParserRegistry)
+        ↓
+Raw Records (raw_records with byte_start / byte_end)
+        ↓
+Normalized Events (events with forensic attributes)
+        ↓
+Timeline / Session Correlation
+        ↓
+Retrieval (SQL, FTS5, Vector)
+```
+
+See [`docs/PARSERS.md`](PARSERS.md) for the complete parser subsystem architecture, interface definitions, and OpenSSH normalization rules.
+
 ### Immutability
 
 Original evidence objects are content-addressed by hash, stored read-only after ingestion, and never edited in place. Normalized events are derived data and contain a pointer to the immutable evidence object/provenance range.

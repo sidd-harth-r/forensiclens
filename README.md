@@ -85,9 +85,14 @@ The primary objective of ForensicLens is to enable verifiable, privacy-safe digi
 
 ## 6. Current Development Status
 
-> [!IMPORTANT]
-> **Status: Repository Initialization & Foundation Phase**  
-> The project repository structure, documentation specifications (PRD, Architecture, Database Design, Design System), environment profiles, and security configurations have been established. Actual functional implementations of the backend modules, database migrations, frontend UI components, and ML retrieval pipelines are pending and will be introduced phase-by-phase.
+> [!NOTE]
+> **Status: Phase 1 Ingestion, Evidence Storage & Parser Foundation Active**
+> Key P0 architectural foundations are implemented and verified with automated test suites:
+> - **FastAPI Backend Bootstrap**: Working ASGI backend entry point with health checks and OpenAPI docs.
+> - **P0 Case Database Foundation**: SQLite + FTS5 schema (20 case tables, 2 legal-KB tables, 1 FTS5 virtual table), strict foreign key cascades, WAL mode, per-case database isolation, and migration checksum verification (`backend/migrations/001_initial.sql`).
+> - **P0 Evidence Ingestion Foundation**: Content-addressed immutable artifact storage under `cases/<case_id>/evidence/objects/`, SHA-256 integrity verification, database metadata tracking, and path traversal prevention (`backend/app/evidence/`).
+> - **P0 Parser Foundation**: Pluggable forensic log parser architecture (`BaseParser`, `ParserRegistry`) with operational Linux/OpenSSH authentication log parser (`OpenSSHParser`), exact byte-offset tracking, ReDoS-safe patterns, IP scope categorization, and provenance preservation (`backend/app/parsers/`).
+> - **Automated Test Suite**: 88 unit and integration tests passing (`pytest`), validating database isolation, ingestion immutability, and parser correctness.
 
 ---
 
@@ -100,8 +105,9 @@ forensiclens/
 │   ├── app/
 │   │   ├── api/            # REST API endpoints & route handlers
 │   │   ├── cases/          # Case management, lifecycle & metadata
-│   │   ├── ingestion/      # Forensic artifact parsers & file normalization
 │   │   ├── evidence/       # Evidence models, indexing & raw storage
+│   │   ├── parsers/        # Pluggable forensic log parsers & registry
+│   │   ├── ingestion/      # Forensic artifact ingestion orchestration
 │   │   ├── retrieval/      # FTS5 lexical, Chroma dense, RRF & rerankers
 │   │   ├── correlation/    # Timeline reconstruction & session correlation
 │   │   ├── behaviour/      # MITRE ATT&CK behavioural mapping
@@ -162,10 +168,13 @@ ForensicLens is designed specifically for handling sensitive forensic data and e
 - [x] **Phase 0: Project Inception & Foundation**
   - Specification & requirements definition (PRD, Architecture, Database, Design System).
   - Repository scaffold, security policies, and environment setup.
-- [ ] **Phase 1: Ingestion, Evidence Storage & Audit Logging**
-  - Forensic artifact parsers (auth logs, syslog, command history, network flows).
-  - SHA-256 evidence hashing and SQLCipher case database setup.
-  - Tamper-evident hash-chained audit logging.
+  - Minimal FastAPI backend service with health probes.
+- [/] **Phase 1: Ingestion, Evidence Storage & Audit Logging**
+  - [x] SQLite + FTS5 per-case database foundation & migration integrity.
+  - [x] Content-addressed immutable evidence ingestion & SHA-256 validation.
+  - [x] Pluggable parser foundation & OpenSSH authentication log parser.
+  - [ ] Additional forensic parsers (syslog, Apache, Windows Event Logs, bash history).
+  - [ ] Tamper-evident hash-chained audit logging.
 - [ ] **Phase 2: Hybrid Retrieval & Timeline Correlation**
   - SQLite FTS5 lexical indexing.
   - Sentence-transformers embedding generation & ChromaDB vector indexing.
