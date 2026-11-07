@@ -6,4 +6,5 @@ export * from "./finding";
 export * from "./legal";
 export * from "./audit";
 export * from "./system";
+export * from "./retrieval";
 

@@ -16,6 +16,14 @@ export const API_BASE_URL = (env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
 export const DATA_MODE = env.VITE_DATA_MODE || "api";
 export const isApiMode = DATA_MODE === "api";
 
+/**
+ * Resolves whether API mode is active, respecting an optional caller-level override.
+ * Preserves the immutability of production `isApiMode` while enabling leak-free test isolation.
+ */
+export function resolveApiMode(override?: boolean): boolean {
+  return typeof override === "boolean" ? override : isApiMode;
+}
+
 export class ApiError extends Error {
   status: number;
   details?: unknown;
