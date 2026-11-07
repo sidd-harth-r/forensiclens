@@ -131,6 +131,7 @@ class TestSchemaCreation:
         rows = initialized_db.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' "
             "AND name NOT LIKE 'events_fts%' "
+            "AND name NOT LIKE 'raw_records_fts%' "
             "AND name NOT LIKE 'sqlite_%'"
         ).fetchall()
         actual_tables = {row["name"] for row in rows}

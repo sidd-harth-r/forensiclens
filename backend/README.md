@@ -64,6 +64,14 @@ All endpoints follow the `/api/...` convention and enforce strict per-case SQLit
 | `GET` | `/api/cases/{case_id}/sessions` | Reconstruct and list forensic authentication sessions (temporal proximity, lifecycle boundaries, IP/user correlation) |
 | `GET` | `/api/cases/{case_id}/sessions/{session_id}` | Retrieve reconstructed session details with ordered event sequence and correlation basis |
 
+### Retrieval (Step 7)
+
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/api/cases/{case_id}/retrieval/status` | Inspect vector index state and local model readiness |
+| `POST` | `/api/cases/{case_id}/retrieval/index` | Incrementally index or rebuild case vector collection |
+| `POST` | `/api/cases/{case_id}/retrieval/search` | Perform hybrid evidence retrieval (KEYWORD_ONLY, SEMANTIC_ONLY, HYBRID, HYBRID_RERANKED) |
+
 ---
 
 ## Running Backend and Frontend Together
@@ -151,4 +159,30 @@ curl -X GET "http://127.0.0.1:8000/api/cases/CASE-2026-001/sessions?status=CLOSE
 ### Inspect Reconstructed Session
 ```bash
 curl -X GET "http://127.0.0.1:8000/api/cases/CASE-2026-001/sessions/SES_CASE-2026-001_001"
+```
+
+### Check Retrieval Status
+```bash
+curl -X GET "http://127.0.0.1:8000/api/cases/CASE-2026-001/retrieval/status"
+```
+
+### Index Case Records for Semantic Search
+```bash
+curl -X POST "http://127.0.0.1:8000/api/cases/CASE-2026-001/retrieval/index" \
+  -H "Content-Type: application/json" \
+  -d '{"rebuild": false, "batchSize": 32}'
+```
+
+### Perform Hybrid Evidence Retrieval
+```bash
+curl -X POST "http://127.0.0.1:8000/api/cases/CASE-2026-001/retrieval/search" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "failed password invalid user hacker",
+    "mode": "HYBRID_RERANKED",
+    "topK": 10,
+    "lexicalCandidates": 50,
+    "semanticCandidates": 50,
+    "rerankCandidates": 30
+  }'
 ```

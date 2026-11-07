@@ -27,8 +27,8 @@ from pathlib import Path
 from typing import Optional
 
 
-# Schema version corresponding to 001_initial.sql
-SCHEMA_VERSION = 1
+# Schema version corresponding to latest migration
+SCHEMA_VERSION = 2
 
 # Migration directory relative to this file
 _MIGRATIONS_DIR = Path(__file__).resolve().parent.parent.parent / "migrations"
@@ -337,6 +337,7 @@ EXPECTED_TABLES: frozenset[str] = frozenset(
 EXPECTED_FTS_TABLES: frozenset[str] = frozenset(
     [
         "events_fts",
+        "raw_records_fts",
     ]
 )
 
@@ -513,4 +514,3 @@ def initialize_legal_kb(db_path: str | Path) -> sqlite3.Connection:
 
     conn.commit()
     return conn
-
