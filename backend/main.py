@@ -13,6 +13,7 @@ from app.api.events import router as events_router
 from app.api.timeline import router as timeline_router
 from app.api.sessions import router as sessions_router
 from app.api.retrieval import router as retrieval_router
+from app.api.claims import router as claims_router
 
 app = FastAPI(
     title="ForensicLens Backend",
@@ -41,6 +42,7 @@ app.include_router(events_router)
 app.include_router(timeline_router)
 app.include_router(sessions_router)
 app.include_router(retrieval_router)
+app.include_router(claims_router)
 
 
 @app.get("/health")

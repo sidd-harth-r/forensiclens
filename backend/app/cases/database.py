@@ -28,7 +28,7 @@ from typing import Optional
 
 
 # Schema version corresponding to latest migration
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 4
 
 # Migration directory relative to this file
 _MIGRATIONS_DIR = Path(__file__).resolve().parent.parent.parent / "migrations"
@@ -122,30 +122,395 @@ def _get_applied_migrations(conn: sqlite3.Connection) -> dict[int, str]:
         return {}
 
 
+def _strip_sql_comments(sql_text: str) -> str:
+    """
+    Strip SQL line comments (-- ...) and block comments (/* ... */) while strictly
+    preserving any comment-like characters inside:
+    - Single-quoted strings ('...', with '' escaping, following SQLite rules without backslash escapes)
+    - Double-quoted identifiers ("...", with "" escaping)
+    - Backtick-quoted identifiers (`...`, with `` escaping)
+    - Bracket-quoted identifiers ([...], with ]] escaping)
+    """
+    out: list[str] = []
+    i = 0
+    n = len(sql_text)
+
+    while i < n:
+        ch = sql_text[i]
+
+        # 1. Single-quoted string literal: '...' (SQLite does not treat backslash as escape)
+        if ch == "'":
+            out.append(ch)
+            i += 1
+            while i < n:
+                c = sql_text[i]
+                out.append(c)
+                if c == "'":
+                    if i + 1 < n and sql_text[i + 1] == "'":
+                        i += 1
+                        out.append(sql_text[i])
+                    else:
+                        i += 1
+                        break
+                i += 1
+            else:
+                raise ValueError("Incomplete or malformed SQL: unclosed single-quoted string literal.")
+
+        # 2. Double-quoted identifier: "..."
+        elif ch == '"':
+            out.append(ch)
+            i += 1
+            while i < n:
+                c = sql_text[i]
+                out.append(c)
+                if c == '"':
+                    if i + 1 < n and sql_text[i + 1] == '"':
+                        i += 1
+                        out.append(sql_text[i])
+                    else:
+                        i += 1
+                        break
+                i += 1
+            else:
+                raise ValueError("Incomplete or malformed SQL: unclosed double-quoted identifier.")
+
+        # 3. Backtick-quoted identifier: `...`
+        elif ch == "`":
+            out.append(ch)
+            i += 1
+            while i < n:
+                c = sql_text[i]
+                out.append(c)
+                if c == "`":
+                    if i + 1 < n and sql_text[i + 1] == "`":
+                        i += 1
+                        out.append(sql_text[i])
+                    else:
+                        i += 1
+                        break
+                i += 1
+            else:
+                raise ValueError("Incomplete or malformed SQL: unclosed backtick identifier.")
+
+        # 4. Bracket-quoted identifier: [...]
+        elif ch == "[":
+            out.append(ch)
+            i += 1
+            while i < n:
+                c = sql_text[i]
+                out.append(c)
+                if c == "]":
+                    if i + 1 < n and sql_text[i + 1] == "]":
+                        i += 1
+                        out.append(sql_text[i])
+                    else:
+                        i += 1
+                        break
+                i += 1
+            else:
+                raise ValueError("Incomplete or malformed SQL: unclosed bracket identifier.")
+
+        # 5. Line comment: -- ...
+        elif ch == "-" and i + 1 < n and sql_text[i + 1] == "-":
+            i += 2
+            while i < n and sql_text[i] != "\n":
+                i += 1
+            if i < n and sql_text[i] == "\n":
+                out.append("\n")
+                i += 1
+
+        # 6. Block comment: /* ... */
+        elif ch == "/" and i + 1 < n and sql_text[i + 1] == "*":
+            i += 2
+            while i < n:
+                if sql_text[i] == "*" and i + 1 < n and sql_text[i + 1] == "/":
+                    i += 2
+                    out.append(" ")
+                    break
+                i += 1
+            else:
+                raise ValueError("Incomplete or malformed SQL: unclosed block comment.")
+
+        else:
+            out.append(ch)
+            i += 1
+
+    return "".join(out).strip()
+
+
+def _split_sql_statements(sql_text: str) -> list[str]:
+    """
+    Split SQL text into complete statements. Correctly handles:
+    - Complete CREATE TRIGGER ... BEGIN ... END; statements with multi-statement bodies
+    - CASE ... WHEN ... THEN ... ELSE ... END expressions inside trigger bodies
+    - Semicolons inside quoted strings or identifiers (ignored)
+    - Semicolons inside line and block comments (ignored)
+    - Multiple independent statements on the same line
+    - Trailing comments without final SQL statements (do not emit empty statements)
+    - Rejection of incomplete or malformed SQL rather than returning partial fragments
+    - Follows SQLite quoting rules without treating backslash as an escape
+    """
+    statements: list[str] = []
+    i = 0
+    n = len(sql_text)
+    stmt_start = 0
+
+    while i < n:
+        ch = sql_text[i]
+
+        # 1. Single quotes (SQLite rules: escaped ONLY by doubling '', backslash is not an escape)
+        if ch == "'":
+            i += 1
+            while i < n:
+                c = sql_text[i]
+                if c == "'":
+                    if i + 1 < n and sql_text[i + 1] == "'":
+                        i += 1
+                    else:
+                        i += 1
+                        break
+                i += 1
+            else:
+                raise ValueError("Incomplete or malformed SQL: unclosed single-quoted string literal.")
+            continue
+
+        # 2. Double quotes
+        elif ch == '"':
+            i += 1
+            while i < n:
+                c = sql_text[i]
+                if c == '"':
+                    if i + 1 < n and sql_text[i + 1] == '"':
+                        i += 1
+                    else:
+                        i += 1
+                        break
+                i += 1
+            else:
+                raise ValueError("Incomplete or malformed SQL: unclosed double-quoted identifier.")
+            continue
+
+        # 3. Backticks
+        elif ch == "`":
+            i += 1
+            while i < n:
+                c = sql_text[i]
+                if c == "`":
+                    if i + 1 < n and sql_text[i + 1] == "`":
+                        i += 1
+                    else:
+                        i += 1
+                        break
+                i += 1
+            else:
+                raise ValueError("Incomplete or malformed SQL: unclosed backtick identifier.")
+            continue
+
+        # 4. Brackets
+        elif ch == "[":
+            i += 1
+            while i < n:
+                c = sql_text[i]
+                if c == "]":
+                    if i + 1 < n and sql_text[i + 1] == "]":
+                        i += 1
+                    else:
+                        i += 1
+                        break
+                i += 1
+            else:
+                raise ValueError("Incomplete or malformed SQL: unclosed bracket identifier.")
+            continue
+
+        # 5. Line comments
+        elif ch == "-" and i + 1 < n and sql_text[i + 1] == "-":
+            i += 2
+            while i < n and sql_text[i] != "\n":
+                i += 1
+            if i < n and sql_text[i] == "\n":
+                i += 1
+            continue
+
+        # 6. Block comments
+        elif ch == "/" and i + 1 < n and sql_text[i + 1] == "*":
+            i += 2
+            while i < n:
+                if sql_text[i] == "*" and i + 1 < n and sql_text[i + 1] == "/":
+                    i += 2
+                    break
+                i += 1
+            else:
+                raise ValueError("Incomplete or malformed SQL: unclosed block comment.")
+            continue
+
+        # 7. Semicolon outside quotes, identifiers, and comments
+        elif ch == ";":
+            candidate = sql_text[stmt_start : i + 1].strip()
+            # Verify whether candidate forms a complete SQL statement
+            # (sqlite3.complete_statement correctly handles multi-statement triggers,
+            # CASE expressions, etc., returning False at internal semicolons)
+            if sqlite3.complete_statement(candidate):
+                core = _strip_sql_comments(candidate)
+                if core:
+                    statements.append(candidate)
+                    # Advance past trailing whitespace or inline line-comment on the same line
+                    j = i + 1
+                    while j < n and sql_text[j] in " \t":
+                        j += 1
+                    if j + 1 < n and sql_text[j] == "-" and sql_text[j + 1] == "-":
+                        while j < n and sql_text[j] != "\n":
+                            j += 1
+                    if j < n and sql_text[j] == "\n":
+                        j += 1
+                    stmt_start = j
+                    i = j
+                    continue
+                else:
+                    stmt_start = i + 1
+            # If sqlite3.complete_statement is False, candidate is inside a trigger body
+            # or compound statement. Never reset stmt_start!
+            i += 1
+            continue
+
+        i += 1
+
+    remainder = sql_text[stmt_start:].strip()
+    if remainder:
+        core = _strip_sql_comments(remainder)
+        if core:
+            # Trailing non-comment text must be a complete SQL statement;
+            # incomplete SQL must be rejected rather than returning broken fragments.
+            if not sqlite3.complete_statement(remainder):
+                raise ValueError(
+                    f"Incomplete or malformed SQL statement: {remainder!r}"
+                )
+            statements.append(remainder)
+
+    return statements
+
+
 def _apply_migration(
     conn: sqlite3.Connection, version: int, sql_path: Path
 ) -> None:
-    """Apply a single migration file within the existing transaction."""
+    """
+    Apply a single migration file atomically within an isolated transaction.
+
+    Guarantees:
+    - Rejects execution if a transaction is already active on the connection.
+    - Determines whether foreign keys must be disabled prior to the migration.
+    - Encloses foreign-key state transitions within a structured cleanup block.
+    - Safely handles any failure when attempting to disable foreign keys.
+    - Executes DDL and DML statements individually using complete_statement parsing.
+    - Filters out standalone PRAGMA foreign_keys statements from the inner transaction.
+    - Performs PRAGMA foreign_key_check while the transaction is still active.
+    - Inserts the migration record into schema_migrations inside the same transaction.
+    - Commits only after all statements and foreign-key integrity checks succeed.
+    - Automatically rolls back all statements on any error if a transaction is open.
+    - Re-enables and verifies foreign-key enforcement in a finally block after success and failure.
+    - Preserves the primary migration exception if foreign-key restoration fails.
+    """
+    if conn.in_transaction:
+        raise MigrationError(
+            f"Cannot apply migration {version:03d}: connection is already inside an active transaction."
+        )
+
     sql_text = sql_path.read_text(encoding="utf-8")
     checksum = _compute_migration_checksum(sql_text)
-
     try:
-        conn.executescript(sql_text)
-    except sqlite3.Error as e:
+        statements = _split_sql_statements(sql_text)
+    except ValueError as e:
         raise MigrationError(
-            f"Migration {version:03d} failed: {e}"
+            f"Cannot apply migration {version:03d}: malformed or incomplete SQL: {e}"
         ) from e
 
-    # Re-enable foreign keys after executescript (which issues implicit COMMIT)
-    conn.execute("PRAGMA foreign_keys = ON")
-
-    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    conn.execute(
-        "INSERT OR REPLACE INTO schema_migrations (version, checksum, applied_at) "
-        "VALUES (?, ?, ?)",
-        (version, checksum, now_utc),
+    # Determine whether this migration requires disabling foreign keys (e.g. table rebuilds)
+    requires_fk_off = any(
+        _strip_sql_comments(s).upper().startswith("PRAGMA FOREIGN_KEYS")
+        and "OFF" in _strip_sql_comments(s).upper()
+        for s in statements
     )
-    conn.commit()
+
+    migration_exc: Optional[BaseException] = None
+
+    try:
+        if requires_fk_off:
+            try:
+                # PRAGMA foreign_keys = OFF MUST execute outside any multi-statement transaction
+                conn.execute("PRAGMA foreign_keys = OFF")
+            except Exception as e:
+                raise MigrationError(
+                    f"Failed to disable foreign keys before migration {version:03d}: {e}"
+                ) from e
+
+        # Begin an immediate exclusive transaction for atomic DDL + DML execution
+        conn.execute("BEGIN IMMEDIATE")
+
+        for stmt in statements:
+            core = _strip_sql_comments(stmt)
+            if not core:
+                continue
+            cleaned = core.rstrip(";")
+            # Do not execute standalone PRAGMA foreign_keys inside the transaction
+            # (PRAGMA foreign_keys is a no-op inside transactions and is managed by the runner)
+            if cleaned.upper().startswith("PRAGMA FOREIGN_KEYS"):
+                continue
+            conn.execute(stmt)
+
+        # Run foreign key integrity check INSIDE the active transaction before commit
+        fk_errors = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if fk_errors:
+            raise MigrationError(
+                f"Migration {version:03d} resulted in foreign key constraint violations: {fk_errors}"
+            )
+
+        # Insert migration tracking record within the same transaction
+        now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_migrations (version, checksum, applied_at) "
+            "VALUES (?, ?, ?)",
+            (version, checksum, now_utc),
+        )
+
+        conn.commit()
+
+    except Exception as e:
+        if conn.in_transaction:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        if isinstance(e, MigrationError):
+            migration_exc = e
+        else:
+            migration_exc = MigrationError(f"Migration {version:03d} failed: {e}")
+            migration_exc.__cause__ = e
+        raise migration_exc
+
+    finally:
+        # Always restore and verify foreign-key enforcement after success and failure
+        try:
+            conn.execute("PRAGMA foreign_keys = ON")
+            fk_status = conn.execute("PRAGMA foreign_keys").fetchone()
+            if not fk_status or fk_status[0] != 1:
+                raise MigrationError(
+                    f"Failed to restore foreign key enforcement after migration {version:03d}."
+                )
+        except Exception as restore_err:
+            if migration_exc is not None:
+                # Do not silently replace the original migration exception.
+                # Preserve migration_exc as primary, attaching restore_err in context / notes.
+                if hasattr(migration_exc, "add_note"):
+                    migration_exc.add_note(
+                        f"Additionally, foreign-key restoration failed: {restore_err}"
+                    )
+                migration_exc.__context__ = restore_err
+                raise migration_exc
+            else:
+                if isinstance(restore_err, MigrationError):
+                    raise
+                raise MigrationError(
+                    f"Failed to restore foreign key enforcement after migration {version:03d}: {restore_err}"
+                ) from restore_err
 
 
 def get_case_db_path(data_dir: str | Path, case_id: str) -> Path:
@@ -153,14 +518,25 @@ def get_case_db_path(data_dir: str | Path, case_id: str) -> Path:
     Return the path to a case database file.
 
     Structure: <data_dir>/cases/<case_id>/case.db
+    Also supports data_dir directly pointing to the cases folder.
     """
-    return Path(data_dir) / "cases" / case_id / "case.db"
+    p = Path(data_dir)
+    direct = p / case_id / "case.db"
+    if direct.is_file():
+        return direct
+    nested = p / "cases" / case_id / "case.db"
+    if nested.is_file():
+        return nested
+    if p.name == "cases":
+        return direct
+    return nested
 
 
 def open_case_db(
     db_path: str | Path,
     *,
     create: bool = False,
+    read_only: bool = False,
 ) -> sqlite3.Connection:
     """
     Open a case database connection with required pragmas.
@@ -170,6 +546,8 @@ def open_case_db(
         create: If True, create the database file and parent directories
                 if they do not exist. If False, raise DatabaseError when
                 the file is missing.
+        read_only: If True, enforce read-only execution (PRAGMA query_only = ON)
+                   to guarantee evidence immutability during retrieval and verification.
 
     Returns:
         A configured sqlite3.Connection with foreign keys, WAL, and
@@ -187,10 +565,19 @@ def open_case_db(
     if create:
         db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    conn = sqlite3.connect(str(db_path))
+    if read_only:
+        # Enforce OS-level and SQLite-level read-only mode (URI mode=ro + PRAGMA query_only = ON)
+        uri = db_path.resolve().as_uri() + "?mode=ro"
+        conn = sqlite3.connect(uri, uri=True)
+    else:
+        conn = sqlite3.connect(str(db_path))
+
     conn.row_factory = sqlite3.Row
 
     _configure_connection(conn)
+
+    if read_only:
+        conn.execute("PRAGMA query_only = ON")
 
     if create and not _check_fts5_available(conn):
         conn.close()
@@ -201,6 +588,15 @@ def open_case_db(
         )
 
     return conn
+
+
+def open_case_db_readonly(db_path: str | Path) -> sqlite3.Connection:
+    """
+    Open a case database connection in strictly read-only mode (PRAGMA query_only = ON).
+
+    Used during claim verification and evidence retrieval to ensure absolute immutability.
+    """
+    return open_case_db(db_path, create=False, read_only=True)
 
 
 def initialize_case_db(

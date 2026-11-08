@@ -12,7 +12,7 @@ from typing import Generator
 
 from fastapi import HTTPException, status
 
-from app.cases.database import close_case_db, open_case_db
+from app.cases.database import close_case_db, open_case_db, open_case_db_readonly
 from app.config import SAFE_ID_REGEX, get_cases_dir
 
 
@@ -61,3 +61,18 @@ def get_case_connection(case_id: str) -> Generator[sqlite3.Connection, None, Non
     finally:
         close_case_db(conn)
 
+
+def get_readonly_case_connection(case_id: str) -> Generator[sqlite3.Connection, None, None]:
+    """
+    Open an isolated, read-only SQLite connection (PRAGMA query_only = ON) for the specified case.
+
+    Guarantees evidence immutability during retrieval and verification operations.
+    """
+    case_dir = get_verified_case_dir(case_id)
+    db_path = case_dir / "case.db"
+
+    conn = open_case_db_readonly(db_path)
+    try:
+        yield conn
+    finally:
+        close_case_db(conn)

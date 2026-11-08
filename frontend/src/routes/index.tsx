@@ -8,6 +8,7 @@ import { EventsPage } from "@/pages/EventsPage";
 import { TimelinePage } from "@/pages/TimelinePage";
 import { SessionsPage } from "@/pages/SessionsPage";
 import { RetrievalPage } from "@/pages/RetrievalPage";
+import { ClaimVerificationPage } from "@/pages/ClaimVerificationPage";
 import { InvestigationPage } from "@/pages/InvestigationPage";
 import { FindingsPage } from "@/pages/FindingsPage";
 import { LegalPage } from "@/pages/LegalPage";
@@ -56,6 +57,10 @@ export const router = createBrowserRouter([
         element: <RetrievalPage />,
       },
       {
+        path: "claims",
+        element: <ClaimVerificationPage />,
+      },
+      {
         path: "investigation",
         element: <InvestigationPage />,
       },
@@ -82,4 +87,3 @@ export const router = createBrowserRouter([
     ],
   },
 ]);
-

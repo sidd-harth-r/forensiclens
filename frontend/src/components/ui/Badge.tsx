@@ -43,16 +43,23 @@ export function Badge({ className, variant, icon, children, ...props }: BadgePro
  */
 export function ClaimStatusBadge({ status }: { status: string }) {
   switch (status) {
+    case "SUPPORTED":
     case "VERIFIED":
       return (
         <Badge variant="verified" icon={<CheckCircle2 className="w-3 h-3 text-status-success" aria-hidden="true" />}>
-          VERIFIED
+          SUPPORTED
         </Badge>
       );
     case "CONTRADICTED":
       return (
         <Badge variant="danger" icon={<XCircle className="w-3 h-3 text-status-danger" aria-hidden="true" />}>
           CONTRADICTED
+        </Badge>
+      );
+    case "INSUFFICIENT_EVIDENCE":
+      return (
+        <Badge variant="warning" icon={<AlertTriangle className="w-3 h-3 text-status-warning" aria-hidden="true" />}>
+          INSUFFICIENT EVIDENCE
         </Badge>
       );
     case "REQUIRES_HUMAN_JUDGMENT":
@@ -115,4 +122,3 @@ export function ParserStatusBadge({ status }: { status: string }) {
       );
   }
 }
-

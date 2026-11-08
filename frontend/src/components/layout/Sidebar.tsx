@@ -9,6 +9,7 @@ import {
   Clock,
   Layers,
   Sparkles,
+  ShieldCheck,
   Search,
   CheckCircle2,
   Scale,
@@ -44,6 +45,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: "Timeline", to: "/timeline", icon: Clock },
   { label: "Sessions", to: "/sessions", icon: Layers },
   { label: "Retrieval", to: "/retrieval", icon: Sparkles },
+  { label: "Claims", to: "/claims", icon: ShieldCheck },
   {
     label: "Investigation",
     to: "/investigation",
