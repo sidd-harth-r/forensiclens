@@ -12,9 +12,14 @@ const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setThemeState] = useState<Theme>(() => {
-    const saved = localStorage.getItem("forensiclens-theme") as Theme | null;
-    if (saved === "light" || saved === "dark") return saved;
-    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    try {
+      const saved = localStorage.getItem("forensiclens-theme") as Theme | null;
+      if (saved === "light" || saved === "dark") return saved;
+    } catch {
+      // Storage unavailable (restricted context) — fall through to default
+    }
+    // Dark graphite is the primary investigation workspace
+    return "dark";
   });
 
   useEffect(() => {
@@ -24,7 +29,11 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     } else {
       root.classList.remove("dark");
     }
-    localStorage.setItem("forensiclens-theme", theme);
+    try {
+      localStorage.setItem("forensiclens-theme", theme);
+    } catch {
+      // Ignore storage errors
+    }
   }, [theme]);
 
   const toggleTheme = () => {

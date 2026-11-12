@@ -1,330 +1,505 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { useCase } from "@/context/CaseContext";
-import { PageHeader } from "@/components/layout/PageHeader";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/Card";
-import { Button } from "@/components/ui/Button";
-import { Badge } from "@/components/ui/Badge";
-import { LoadingState } from "@/components/common/LoadingState";
-import { getSystemStatus } from "@/services/system";
-import { SystemStatus } from "@/types/system";
 import {
+  ArrowRight,
   FolderKanban,
   HardDrive,
-  ListOrdered,
+  ListTree,
   ShieldCheck,
-  Search,
-  CheckCircle2,
-  ArrowRight,
-  Server,
-  Database,
+  Upload,
+  HelpCircle,
   Cpu,
-  WifiOff,
-  Activity,
+  CheckCircle2,
 } from "lucide-react";
+import { useCase } from "@/context/CaseContext";
+import { PageHeader, CaseScope } from "@/components/layout/PageHeader";
+import { Panel } from "@/components/ui/Card";
+import { LinkButton } from "@/components/ui/Button";
+import { CaseStatusBadge, ClaimStatusBadge, ParserStatusBadge, Badge } from "@/components/ui/Badge";
+import { StatTile, DistributionBar, KeyValueList, HashValue } from "@/components/ui/DataDisplay";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/Table";
+import { Skeleton, TableSkeleton, CardSkeleton } from "@/components/ui/Skeleton";
+import { EmptyState } from "@/components/common/EmptyState";
+import { ErrorState } from "@/components/common/ErrorState";
+import { getEvidenceFiles } from "@/services/evidence";
+import { getCaseClaims } from "@/services/claims";
+import { getRetrievalStatus } from "@/services/retrieval";
+import { isApiMode } from "@/services/apiClient";
+import type { EvidenceFile } from "@/types/evidence";
+import type { Claim, ClaimListResponse } from "@/types/claims";
+import type { RetrievalStatusResponse } from "@/types/retrieval";
+import { describeError, formatBytes, formatDateTime } from "@/lib/formatters";
+import { cn } from "@/lib/utils";
+
+interface AsyncSection<T> {
+  data: T | null;
+  loading: boolean;
+  error: string | null;
+}
+
+const initial = <T,>(): AsyncSection<T> => ({ data: null, loading: true, error: null });
+
+function errMsg(err: unknown, fallback: string) {
+  return describeError(err, fallback);
+}
 
 export function DashboardPage() {
-  const { currentCase, isLoading: caseLoading } = useCase();
-  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
-  const [statusLoading, setStatusLoading] = useState(true);
+  const { cases, currentCase, isLoading: casesLoading, error: casesError, refreshCases } = useCase();
+  const caseId = currentCase?.caseId;
+
+  const [evidence, setEvidenceState] = useState<AsyncSection<EvidenceFile[]>>(initial);
+  const [claims, setClaimsState] = useState<AsyncSection<{ list: ClaimListResponse; recent: Claim[] }>>(initial);
+  const [index, setIndexState] = useState<AsyncSection<RetrievalStatusResponse>>(initial);
+
+  // Generation counter: responses from a previous case (or a superseded reload)
+  // must never be written into the panels of the currently selected case.
+  const generation = useRef(0);
+
+  const loadCaseSections = useCallback(async () => {
+    const gen = ++generation.current;
+    const live = () => gen === generation.current;
+    const setEvidence = (v: AsyncSection<EvidenceFile[]>) => live() && setEvidenceState(v);
+    const setClaims = (v: AsyncSection<{ list: ClaimListResponse; recent: Claim[] }>) => live() && setClaimsState(v);
+    const setIndex = (v: AsyncSection<RetrievalStatusResponse>) => live() && setIndexState(v);
+
+    if (!caseId) {
+      setEvidence({ data: null, loading: false, error: null });
+      setClaims({ data: null, loading: false, error: null });
+      setIndex({ data: null, loading: false, error: null });
+      return;
+    }
+    setEvidence(initial());
+    setClaims(initial());
+    setIndex(initial());
+
+    const evidenceP = getEvidenceFiles(caseId)
+      .then((d) => setEvidence({ data: d, loading: false, error: null }))
+      .catch((e) => setEvidence({ data: null, loading: false, error: errMsg(e, "Failed to load evidence") }));
+
+    const claimsP = (async () => {
+      try {
+        const first = await getCaseClaims(caseId, { page: 1, pageSize: 5 });
+        // Backend orders claims oldest-first; read the last page for the newest entries.
+        let pool = first.claims;
+        if (first.totalPages > 1) {
+          const last = await getCaseClaims(caseId, { page: first.totalPages, pageSize: 5 });
+          pool = [...last.claims];
+        }
+        const recent = [...pool].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || "")).slice(0, 5);
+        setClaims({ data: { list: first, recent }, loading: false, error: null });
+      } catch (e) {
+        setClaims({ data: null, loading: false, error: errMsg(e, "Failed to load claims") });
+      }
+    })();
+
+    const indexP = getRetrievalStatus(caseId)
+      .then((d) => setIndex({ data: d, loading: false, error: null }))
+      .catch((e) => setIndex({ data: null, loading: false, error: errMsg(e, "Failed to load index status") }));
+
+    await Promise.allSettled([evidenceP, claimsP, indexP]);
+  }, [caseId]);
 
   useEffect(() => {
-    let mounted = true;
-    getSystemStatus().then((res) => {
-      if (mounted) {
-        setSystemStatus(res);
-        setStatusLoading(false);
-      }
-    });
-    return () => {
-      mounted = false;
-    };
-  }, []);
+    void loadCaseSections();
+  }, [loadCaseSections]);
 
-  if (caseLoading || statusLoading) {
-    return <LoadingState message="Loading forensic dashboard overview..." />;
+  const totals = useMemo(
+    () => ({
+      cases: cases.length,
+      open: cases.filter((c) => c.status === "OPEN").length,
+      evidence: cases.reduce((s, c) => s + (c.evidenceCount || 0), 0),
+      events: cases.reduce((s, c) => s + (c.eventsCount || 0), 0),
+    }),
+    [cases]
+  );
+
+  const recentEvidence = useMemo(
+    () =>
+      [...(evidence.data ?? [])].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || "")).slice(0, 6),
+    [evidence.data]
+  );
+
+  const recentCases = useMemo(
+    () => [...cases].sort((a, b) => (b.lastActivity || "").localeCompare(a.lastActivity || "")).slice(0, 5),
+    [cases]
+  );
+
+  const summary = claims.data?.list.summary;
+  const claimTotal = claims.data?.list.total ?? 0;
+  const pending = summary?.UNVERIFIED ?? 0;
+
+  /* ---------------------------------------------------------------- */
+
+  if (casesError && cases.length === 0) {
+    return (
+      <>
+        <PageHeader title="Overview" />
+        <ErrorState title="Could not load cases" message={casesError} onRetry={refreshCases} />
+      </>
+    );
   }
 
+  const workflow: { step: number; label: string; detail: string; to: string; count?: string }[] = [
+    {
+      step: 1,
+      label: "Ingest evidence",
+      detail: "Hash and store artifacts read-only",
+      to: "/evidence",
+      count: currentCase ? `${currentCase.evidenceCount} files` : undefined,
+    },
+    {
+      step: 2,
+      label: "Explore parsed events",
+      detail: "Filter normalized records with provenance",
+      to: "/events",
+      count: currentCase ? `${currentCase.eventsCount.toLocaleString()} events` : undefined,
+    },
+    {
+      step: 3,
+      label: "Reconstruct timeline",
+      detail: "Chronological order and sessions",
+      to: "/timeline",
+    },
+    {
+      step: 4,
+      label: "Retrieve evidence",
+      detail: "Hybrid lexical + semantic search",
+      to: "/retrieval",
+      count: index.data && isApiMode ? `${index.data.indexStatus.toLowerCase()}` : undefined,
+    },
+    {
+      step: 5,
+      label: "Extract & verify claims",
+      detail: "Deterministic verification against evidence",
+      to: "/claims",
+      count: claims.data ? `${claimTotal} claims` : undefined,
+    },
+  ];
+
   return (
-    <div className="space-y-6">
+    <>
       <PageHeader
-        title="Forensic Investigation Overview"
-        description="Air-gapped digital forensics workspace. Operating in local-first mode with cryptographic evidence integrity and verifiable claim resolution."
+        title="Overview"
+        eyebrow={<CaseScope caseId={currentCase?.caseId} name={currentCase?.name} />}
+        description={
+          isApiMode
+            ? "Repository totals and the state of the active investigation. All figures come from the case database."
+            : "Fixture mode: figures below come from bundled sample data, not from any case database."
+        }
         actions={
-          <div className="flex items-center gap-2">
-            <Link to="/investigation">
-              <Button variant="default" size="sm">
-                <Search className="w-3.5 h-3.5 mr-1.5" />
-                New Investigation
-              </Button>
-            </Link>
-          </div>
+          <>
+            <LinkButton to="/evidence" variant="secondary" size="sm">
+              <Upload className="h-3.5 w-3.5" aria-hidden="true" />
+              Ingest evidence
+            </LinkButton>
+            <LinkButton to="/claims" variant="primary" size="sm">
+              <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
+              Verify claims
+            </LinkButton>
+          </>
         }
       />
 
-      {/* Primary Forensic Metrics Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-        <Card className="hover:border-border-strong transition-colors">
-          <CardContent className="p-3.5">
-            <div className="flex items-center justify-between text-text-muted">
-              <span className="text-[11px] font-medium">Active Case</span>
-              <FolderKanban className="w-3.5 h-3.5 text-accent" />
-            </div>
-            <div className="mt-2">
-              <div className="font-mono text-base font-bold text-text-primary truncate">
-                {currentCase?.caseId}
-              </div>
-              <div className="text-[10px] text-text-muted truncate mt-0.5">
-                {currentCase?.status}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+      {/* Metric row */}
+      <section aria-label="Key figures" className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-5">
+        {casesLoading ? (
+          Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-[84px] rounded-md" />)
+        ) : (
+          <>
+            <StatTile
+              label="Cases"
+              value={totals.cases}
+              hint={`${totals.open} open`}
+              icon={<FolderKanban />}
+            />
+            <StatTile
+              label="Evidence items"
+              value={totals.evidence.toLocaleString()}
+              hint="Across all cases"
+              icon={<HardDrive />}
+            />
+            <StatTile
+              label="Parsed events"
+              value={totals.events.toLocaleString()}
+              hint="Across all cases"
+              icon={<ListTree />}
+            />
+            <StatTile
+              label="Claims"
+              value={claims.loading ? "…" : claimTotal}
+              hint={caseId ? `In ${caseId}` : "No active case"}
+              icon={<ShieldCheck />}
+              tone="accent"
+            />
+            <StatTile
+              label="Pending verification"
+              value={claims.loading ? "…" : pending}
+              hint="Unverified claims"
+              icon={<HelpCircle />}
+              tone={pending > 0 ? "warning" : "default"}
+            />
+          </>
+        )}
+      </section>
 
-        <Card className="hover:border-border-strong transition-colors">
-          <CardContent className="p-3.5">
-            <div className="flex items-center justify-between text-text-muted">
-              <span className="text-[11px] font-medium">Evidence Files</span>
-              <HardDrive className="w-3.5 h-3.5 text-indigo-500" />
-            </div>
-            <div className="mt-2">
-              <div className="font-mono text-base font-bold text-text-primary">
-                {currentCase?.evidenceCount}
-              </div>
-              <div className="text-[10px] text-status-success font-medium flex items-center gap-1 mt-0.5">
-                <CheckCircle2 className="w-2.5 h-2.5" /> SHA-256 Verified
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="hover:border-border-strong transition-colors">
-          <CardContent className="p-3.5">
-            <div className="flex items-center justify-between text-text-muted">
-              <span className="text-[11px] font-medium">Parsed Events</span>
-              <ListOrdered className="w-3.5 h-3.5 text-blue-500" />
-            </div>
-            <div className="mt-2">
-              <div className="font-mono text-base font-bold text-text-primary">
-                {currentCase?.eventsCount.toLocaleString()}
-              </div>
-              <div className="text-[10px] text-text-muted truncate mt-0.5">
-                FTS5 Indexed
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="hover:border-border-strong transition-colors">
-          <CardContent className="p-3.5">
-            <div className="flex items-center justify-between text-text-muted">
-              <span className="text-[11px] font-medium">Integrity Status</span>
-              <ShieldCheck className="w-3.5 h-3.5 text-status-success" />
-            </div>
-            <div className="mt-2">
-              <div className="text-base font-bold text-status-success flex items-center gap-1">
-                VALID
-              </div>
-              <div className="text-[10px] text-text-muted truncate mt-0.5">
-                Hash Chain Intact
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="hover:border-border-strong transition-colors">
-          <CardContent className="p-3.5">
-            <div className="flex items-center justify-between text-text-muted">
-              <span className="text-[11px] font-medium">Investigations</span>
-              <Search className="w-3.5 h-3.5 text-purple-500" />
-            </div>
-            <div className="mt-2">
-              <div className="font-mono text-base font-bold text-text-primary">
-                {currentCase?.investigationsCount}
-              </div>
-              <div className="text-[10px] text-text-muted truncate mt-0.5">
-                Privacy L2 Active
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="hover:border-border-strong transition-colors">
-          <CardContent className="p-3.5">
-            <div className="flex items-center justify-between text-text-muted">
-              <span className="text-[11px] font-medium">Verified Findings</span>
-              <CheckCircle2 className="w-3.5 h-3.5 text-status-success" />
-            </div>
-            <div className="mt-2">
-              <div className="font-mono text-base font-bold text-text-primary">
-                {currentCase?.findingsCount}
-              </div>
-              <div className="text-[10px] text-status-success font-medium truncate mt-0.5">
-                Compiled Predicates
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Main split: Current Case Summary & Recent Forensic Activity */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Active Case Detail Card */}
-        <Card className="lg:col-span-2">
-          <CardHeader className="flex flex-row items-center justify-between py-3">
-            <div>
-              <CardTitle>Case Focus: {currentCase?.name}</CardTitle>
-              <CardDescription>
-                Lead Examiner: {currentCase?.leadInvestigator} • Created:{" "}
-                {currentCase?.createdAt ? new Date(currentCase.createdAt).toLocaleDateString() : ""}
-              </CardDescription>
-            </div>
-            <Link to={`/cases/${currentCase?.caseId}`}>
-              <Button variant="outline" size="sm">
-                Case Details
-                <ArrowRight className="w-3 h-3 ml-1" />
-              </Button>
-            </Link>
-          </CardHeader>
-          <CardContent className="space-y-4 pt-4">
-            <p className="text-xs text-text-secondary leading-relaxed">
-              {currentCase?.description}
-            </p>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
-              <div className="p-3 rounded border border-border bg-surface-subtle">
-                <div className="text-[11px] text-text-muted font-medium">Evidence Storage</div>
-                <div className="text-xs font-semibold text-text-primary mt-1">
-                  Immutable Content-Addressed
+      {!casesLoading && !currentCase ? (
+        <EmptyState
+          icon={<FolderKanban />}
+          title="No case selected"
+          description="Create a case or pick one from the case selector to see its evidence, events and verification state."
+          action={
+            <LinkButton to="/cases" size="sm">
+              Go to cases
+            </LinkButton>
+          }
+        />
+      ) : (
+        <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
+          {/* Left column */}
+          <div className="min-w-0 space-y-5 xl:col-span-2">
+            <Panel
+              title="Verification status"
+              description="Latest deterministic outcome per claim in the active case"
+              icon={<ShieldCheck />}
+              actions={
+                <Link to="/claims" className="text-xs text-accent-text hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded">
+                  Open claim verification
+                </Link>
+              }
+            >
+              {claims.loading ? (
+                <div className="space-y-3">
+                  <Skeleton className="h-2 w-full rounded-full" />
+                  <Skeleton className="h-16 w-full" />
                 </div>
-                <div className="text-[10px] text-text-muted mt-0.5 font-mono">
-                  cases/{currentCase?.caseId}/evidence/
-                </div>
-              </div>
-
-              <div className="p-3 rounded border border-border bg-surface-subtle">
-                <div className="text-[11px] text-text-muted font-medium">Legal Foundation</div>
-                <div className="text-xs font-semibold text-text-primary mt-1">
-                  BSA s.63 & IT Act
-                </div>
-                <div className="text-[10px] text-text-muted mt-0.5">
-                  Electronic Certificate Ready
-                </div>
-              </div>
-
-              <div className="p-3 rounded border border-border bg-surface-subtle">
-                <div className="text-[11px] text-text-muted font-medium">Verification Engine</div>
-                <div className="text-xs font-semibold text-text-primary mt-1">
-                  Deterministic Predicates
-                </div>
-                <div className="text-[10px] text-text-muted mt-0.5">
-                  Read-Only Database Connection
-                </div>
-              </div>
-            </div>
-
-            {/* Quick Actions Shortcuts */}
-            <div className="pt-2 border-t border-border-subtle flex flex-wrap items-center gap-2">
-              <span className="text-[11px] font-semibold text-text-muted mr-1">Workflows:</span>
-              <Link to="/evidence">
-                <Button variant="secondary" size="sm">
-                  <HardDrive className="w-3 h-3 mr-1 text-text-muted" /> Explore Evidence
-                </Button>
-              </Link>
-              <Link to="/events">
-                <Button variant="secondary" size="sm">
-                  <ListOrdered className="w-3 h-3 mr-1 text-text-muted" /> Query Events
-                </Button>
-              </Link>
-              <Link to="/timeline">
-                <Button variant="secondary" size="sm">
-                  <Activity className="w-3 h-3 mr-1 text-text-muted" /> View Timeline
-                </Button>
-              </Link>
-              <Link to="/findings">
-                <Button variant="secondary" size="sm">
-                  <CheckCircle2 className="w-3 h-3 mr-1 text-text-muted" /> Inspect Claims
-                </Button>
-              </Link>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Local System Status (Ready for /health API) */}
-        <Card>
-          <CardHeader className="py-3">
-            <div className="flex items-center justify-between">
-              <CardTitle>System & Subsystem Status</CardTitle>
-              <Badge variant="verified" icon={<ShieldCheck className="w-3 h-3" />}>
-                SECURE
-              </Badge>
-            </div>
-            <CardDescription>
-              Architectural boundary monitoring (UI representation)
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3 pt-3">
-            {systemStatus && (
-              <div className="space-y-2.5 text-xs">
-                <div className="flex items-start justify-between p-2 rounded bg-surface-subtle border border-border-subtle">
-                  <div className="flex items-center gap-2">
-                    <Server className="w-4 h-4 text-accent shrink-0" />
-                    <div>
-                      <div className="font-semibold text-text-primary">{systemStatus.backend.name}</div>
-                      <div className="text-[10px] text-text-muted">{systemStatus.backend.description}</div>
-                    </div>
+              ) : claims.error ? (
+                <ErrorState inline title="Could not load claims" message={claims.error} onRetry={loadCaseSections} />
+              ) : claimTotal === 0 ? (
+                <EmptyState
+                  bare
+                  icon={<ShieldCheck />}
+                  title="No claims extracted yet"
+                  description={
+                    isApiMode
+                      ? "Extract claims from retrieved evidence on the Claim Verification page, then verify them deterministically."
+                      : "Claim extraction and verification require the live backend API. Fixture mode never fabricates claims."
+                  }
+                  className="py-6"
+                />
+              ) : (
+                <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_1.1fr]">
+                  <DistributionBar
+                    label="Claim verification status"
+                    segments={[
+                      { key: "SUPPORTED", label: "Supported", value: summary?.SUPPORTED ?? 0, className: "bg-status-success" },
+                      { key: "CONTRADICTED", label: "Contradicted", value: summary?.CONTRADICTED ?? 0, className: "bg-status-danger" },
+                      { key: "INSUFFICIENT_EVIDENCE", label: "Insufficient", value: summary?.INSUFFICIENT_EVIDENCE ?? 0, className: "bg-status-warning" },
+                      { key: "UNVERIFIED", label: "Unverified", value: summary?.UNVERIFIED ?? 0, className: "bg-status-neutral" },
+                    ]}
+                  />
+                  <div className="min-w-0">
+                    <h3 className="label-caps mb-1.5">Most recent claims</h3>
+                    <ul className="divide-y divide-border-subtle rounded border border-border-subtle">
+                      {claims.data?.recent.map((c) => (
+                        <li key={c.claimId} className="flex items-center justify-between gap-3 px-2.5 py-1.5">
+                          <span className="min-w-0">
+                            <span className="block truncate text-xs text-text-primary" title={c.statement}>
+                              {c.statement}
+                            </span>
+                            <span className="font-mono text-2xs text-text-muted">{c.claimType}</span>
+                          </span>
+                          <ClaimStatusBadge status={c.currentStatus} />
+                        </li>
+                      ))}
+                    </ul>
                   </div>
-                  <Badge variant="verified">ONLINE</Badge>
                 </div>
+              )}
+            </Panel>
 
-                <div className="flex items-start justify-between p-2 rounded bg-surface-subtle border border-border-subtle">
-                  <div className="flex items-center gap-2">
-                    <Database className="w-4 h-4 text-emerald-500 shrink-0" />
-                    <div>
-                      <div className="font-semibold text-text-primary">{systemStatus.database.name}</div>
-                      <div className="text-[10px] text-text-muted">{systemStatus.database.description}</div>
-                    </div>
-                  </div>
-                  <Badge variant="verified">WAL ON</Badge>
+            <Panel
+              title="Recent evidence ingestion"
+              description="Newest artifacts in the active case"
+              icon={<HardDrive />}
+              flush
+              actions={
+                <Link to="/evidence" className="text-xs text-accent-text hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded">
+                  All evidence
+                </Link>
+              }
+            >
+              {evidence.loading ? (
+                <TableSkeleton rows={4} columns={5} label="Loading evidence" />
+              ) : evidence.error ? (
+                <div className="p-4">
+                  <ErrorState inline title="Could not load evidence" message={evidence.error} onRetry={loadCaseSections} />
                 </div>
+              ) : recentEvidence.length === 0 ? (
+                <EmptyState
+                  bare
+                  icon={<HardDrive />}
+                  title="No evidence ingested"
+                  description="Ingest a log or artifact to hash it, store it read-only and parse it into events."
+                  action={
+                    <LinkButton to="/evidence" size="sm" variant="secondary">
+                      Ingest evidence
+                    </LinkButton>
+                  }
+                />
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>File</TableHead>
+                      <TableHead>Format</TableHead>
+                      <TableHead>SHA-256</TableHead>
+                      <TableHead className="text-right">Size</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Ingested (UTC)</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {recentEvidence.map((ev) => (
+                      <TableRow key={ev.evidenceId}>
+                        <TableCell className="max-w-[220px]">
+                          <span className="block truncate font-mono text-xs" title={ev.originalName}>
+                            {ev.originalName}
+                          </span>
+                          <span className="font-mono text-2xs text-text-muted">{ev.evidenceId}</span>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline" mono>
+                            {ev.format}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <HashValue value={ev.objectHash} label="SHA-256" leading={8} trailing={6} />
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap text-right font-mono text-xs text-text-secondary">
+                          {formatBytes(ev.objectSizeBytes)}
+                        </TableCell>
+                        <TableCell>
+                          <ParserStatusBadge status={ev.parserStatus} />
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap font-mono text-2xs text-text-muted">
+                          {formatDateTime(ev.createdAt)}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </Panel>
+          </div>
 
-                <div className="flex items-start justify-between p-2 rounded bg-surface-subtle border border-border-subtle">
-                  <div className="flex items-center gap-2">
-                    <Search className="w-4 h-4 text-blue-500 shrink-0" />
-                    <div>
-                      <div className="font-semibold text-text-primary">{systemStatus.searchIndex.name}</div>
-                      <div className="text-[10px] text-text-muted">{systemStatus.searchIndex.description}</div>
-                    </div>
-                  </div>
-                  <Badge variant="verified">SYNCED</Badge>
-                </div>
+          {/* Right column */}
+          <div className="min-w-0 space-y-5">
+            <Panel
+              title="Active case"
+              icon={<FolderKanban />}
+              actions={currentCase && <CaseStatusBadge status={currentCase.status} />}
+            >
+              {casesLoading || !currentCase ? (
+                <CardSkeleton lines={4} className="border-0 p-0" />
+              ) : (
+                <>
+                  <p className="mb-3 text-sm font-medium text-text-primary">{currentCase.name}</p>
+                  {currentCase.description && (
+                    <p className="mb-3 line-clamp-3 text-xs leading-relaxed text-text-muted">{currentCase.description}</p>
+                  )}
+                  <KeyValueList
+                    items={[
+                      { label: "Case ID", value: currentCase.caseId, mono: true },
+                      { label: "Lead examiner", value: currentCase.leadInvestigator },
+                      { label: "Created", value: formatDateTime(currentCase.createdAt), mono: true },
+                      { label: "Last activity", value: formatDateTime(currentCase.lastActivity), mono: true },
+                      {
+                        label: "Retrieval index",
+                        value: !isApiMode ? (
+                          <span className="text-text-muted">Unavailable in fixture mode</span>
+                        ) : index.loading ? (
+                          <span className="text-text-muted">Checking…</span>
+                        ) : index.error ? (
+                          <span className="text-status-danger" title={index.error}>
+                            Status unavailable
+                          </span>
+                        ) : index.data ? (
+                          <span className="inline-flex items-center gap-1.5">
+                            <Cpu className="h-3 w-3 text-text-muted" aria-hidden="true" />
+                            <span className="font-mono">{index.data.indexStatus}</span>
+                            <span className="font-mono text-text-muted">
+                              {index.data.indexedRecords.toLocaleString()}/{index.data.totalRecords.toLocaleString()}
+                            </span>
+                          </span>
+                        ) : null,
+                      },
+                    ]}
+                  />
+                  <Link
+                    to={`/cases/${encodeURIComponent(currentCase.caseId)}`}
+                    className="mt-3 inline-flex items-center gap-1 rounded text-xs text-accent-text hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                  >
+                    Case profile <ArrowRight className="h-3 w-3" aria-hidden="true" />
+                  </Link>
+                </>
+              )}
+            </Panel>
 
-                <div className="flex items-start justify-between p-2 rounded bg-surface-subtle border border-border-subtle">
-                  <div className="flex items-center gap-2">
-                    <Cpu className="w-4 h-4 text-purple-500 shrink-0" />
-                    <div>
-                      <div className="font-semibold text-text-primary">{systemStatus.localLlm.name}</div>
-                      <div className="text-[10px] text-text-muted">{systemStatus.localLlm.description}</div>
-                    </div>
-                  </div>
-                  <Badge variant="verified">OFFLINE</Badge>
-                </div>
+            <Panel title="Investigation workflow" icon={<CheckCircle2 />} flush>
+              <ol className="divide-y divide-border-subtle">
+                {workflow.map((w) => (
+                  <li key={w.step}>
+                    <Link
+                      to={w.to}
+                      className="group flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-surface-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
+                    >
+                      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded border border-border bg-surface-subtle font-mono text-2xs text-text-muted group-hover:border-accent/50 group-hover:text-accent">
+                        {w.step}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm text-text-primary">{w.label}</span>
+                        <span className="block truncate text-2xs text-text-muted">{w.detail}</span>
+                      </span>
+                      {w.count && <span className="shrink-0 font-mono text-2xs text-text-muted">{w.count}</span>}
+                      <ArrowRight className="h-3.5 w-3.5 shrink-0 text-text-disabled group-hover:text-text-secondary" aria-hidden="true" />
+                    </Link>
+                  </li>
+                ))}
+              </ol>
+            </Panel>
 
-                <div className="flex items-start justify-between p-2 rounded bg-surface-subtle border border-border-subtle">
-                  <div className="flex items-center gap-2">
-                    <WifiOff className="w-4 h-4 text-status-success shrink-0" />
-                    <div>
-                      <div className="font-semibold text-text-primary">{systemStatus.networkEgress.name}</div>
-                      <div className="text-[10px] text-text-muted">{systemStatus.networkEgress.description}</div>
-                    </div>
-                  </div>
-                  <Badge variant="verified">ISOLATED</Badge>
-                </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-    </div>
+            <Panel title="Recent case activity" icon={<FolderKanban />} flush>
+              {casesLoading ? (
+                <TableSkeleton rows={3} columns={2} />
+              ) : recentCases.length === 0 ? (
+                <EmptyState bare title="No cases" description="Create a case to begin an investigation." className="py-6" />
+              ) : (
+                <ul className="divide-y divide-border-subtle">
+                  {recentCases.map((c) => (
+                    <li key={c.caseId}>
+                      <Link
+                        to={`/cases/${encodeURIComponent(c.caseId)}`}
+                        className={cn(
+                          "flex items-center justify-between gap-3 px-4 py-2 transition-colors hover:bg-surface-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent",
+                          c.caseId === caseId && "bg-accent-subtle/40"
+                        )}
+                      >
+                        <span className="min-w-0">
+                          <span className="block font-mono text-xs font-medium text-text-primary">{c.caseId}</span>
+                          <span className="block truncate text-2xs text-text-muted">{c.name}</span>
+                        </span>
+                        <span className="shrink-0 text-right font-mono text-2xs text-text-muted">
+                          {formatDateTime(c.lastActivity).replace(" UTC", "")}
+                        </span>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Panel>
+          </div>
+        </div>
+      )}
+    </>
   );
 }

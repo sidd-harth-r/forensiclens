@@ -1,124 +1,232 @@
 import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
-import { CheckCircle2, AlertTriangle, XCircle, HelpCircle, UserCheck, Loader2, Clock } from "lucide-react";
+import {
+  CheckCircle2,
+  AlertTriangle,
+  XCircle,
+  HelpCircle,
+  UserCheck,
+  Loader2,
+  Clock,
+  Info,
+  CircleDot,
+  Archive,
+  Lock,
+} from "lucide-react";
 
 export const badgeVariants = cva(
-  "inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium transition-colors border",
+  "inline-flex items-center gap-1 whitespace-nowrap rounded-sm border px-1.5 py-px text-2xs font-medium leading-4",
   {
     variants: {
       variant: {
-        default: "border-border bg-surface-subtle text-text-primary",
-        verified: "border-emerald-300 dark:border-emerald-800 bg-status-success-bg text-status-success font-semibold",
-        warning: "border-amber-300 dark:border-amber-800 bg-status-warning-bg text-status-warning font-semibold",
-        danger: "border-red-300 dark:border-red-800 bg-status-danger-bg text-status-danger font-semibold",
+        default: "border-border bg-surface-muted text-text-secondary",
+        verified: "border-status-success/30 bg-status-success-bg text-status-success",
+        warning: "border-status-warning/30 bg-status-warning-bg text-status-warning",
+        danger: "border-status-danger/30 bg-status-danger-bg text-status-danger",
         neutral: "border-border bg-status-neutral-bg text-status-neutral",
-        human: "border-purple-300 dark:border-purple-800 bg-status-human-bg text-status-human font-semibold",
-        accent: "border-indigo-300 dark:border-indigo-800 bg-accent-subtle text-accent-text font-semibold",
+        human: "border-status-human/30 bg-status-human-bg text-status-human",
+        info: "border-status-info/30 bg-status-info-bg text-status-info",
+        accent: "border-accent/30 bg-accent-subtle text-accent-text",
+        outline: "border-border bg-transparent text-text-secondary",
+      },
+      mono: {
+        true: "font-mono tracking-tight",
+        false: "",
       },
     },
     defaultVariants: {
       variant: "default",
+      mono: false,
     },
   }
 );
 
+export type BadgeVariant = NonNullable<VariantProps<typeof badgeVariants>["variant"]>;
+
 export interface BadgeProps
-  extends React.HTMLAttributes<HTMLDivElement>,
+  extends React.HTMLAttributes<HTMLSpanElement>,
     VariantProps<typeof badgeVariants> {
   icon?: React.ReactNode;
 }
 
-export function Badge({ className, variant, icon, children, ...props }: BadgeProps) {
+export function Badge({ className, variant, mono, icon, children, ...props }: BadgeProps) {
   return (
-    <div className={cn(badgeVariants({ variant }), className)} {...props}>
+    <span className={cn(badgeVariants({ variant, mono }), className)} {...props}>
       {icon}
       <span>{children}</span>
-    </div>
+    </span>
   );
 }
 
-/**
- * Pre-configured status badge for claim verification status.
- */
-export function ClaimStatusBadge({ status }: { status: string }) {
-  switch (status) {
-    case "SUPPORTED":
-    case "VERIFIED":
-      return (
-        <Badge variant="verified" icon={<CheckCircle2 className="w-3 h-3 text-status-success" aria-hidden="true" />}>
-          SUPPORTED
-        </Badge>
-      );
-    case "CONTRADICTED":
-      return (
-        <Badge variant="danger" icon={<XCircle className="w-3 h-3 text-status-danger" aria-hidden="true" />}>
-          CONTRADICTED
-        </Badge>
-      );
-    case "INSUFFICIENT_EVIDENCE":
-      return (
-        <Badge variant="warning" icon={<AlertTriangle className="w-3 h-3 text-status-warning" aria-hidden="true" />}>
-          INSUFFICIENT EVIDENCE
-        </Badge>
-      );
-    case "REQUIRES_HUMAN_JUDGMENT":
-      return (
-        <Badge variant="human" icon={<UserCheck className="w-3 h-3 text-status-human" aria-hidden="true" />}>
-          HUMAN REVIEW
-        </Badge>
-      );
-    case "UNVERIFIED":
-    default:
-      return (
-        <Badge variant="neutral" icon={<HelpCircle className="w-3 h-3 text-status-neutral" aria-hidden="true" />}>
-          UNVERIFIED
-        </Badge>
-      );
-  }
-}
+const iconCls = "h-3 w-3 shrink-0";
+
+/* ------------------------------------------------------------------ */
+/* Claim verification status                                           */
+/* ------------------------------------------------------------------ */
+
+export const CLAIM_STATUS_META: Record<
+  string,
+  { label: string; variant: BadgeVariant; icon: React.ComponentType<{ className?: string }>; description: string }
+> = {
+  SUPPORTED: {
+    label: "Supported",
+    variant: "verified",
+    icon: CheckCircle2,
+    description: "Deterministic predicate matched stored evidence",
+  },
+  VERIFIED: {
+    label: "Supported",
+    variant: "verified",
+    icon: CheckCircle2,
+    description: "Deterministic predicate matched stored evidence",
+  },
+  CONTRADICTED: {
+    label: "Contradicted",
+    variant: "danger",
+    icon: XCircle,
+    description: "Stored evidence is incompatible with the claim",
+  },
+  INSUFFICIENT_EVIDENCE: {
+    label: "Insufficient evidence",
+    variant: "warning",
+    icon: AlertTriangle,
+    description: "No matching or conclusive records found",
+  },
+  REQUIRES_HUMAN_JUDGMENT: {
+    label: "Human review",
+    variant: "human",
+    icon: UserCheck,
+    description: "Cannot be decided deterministically",
+  },
+  UNVERIFIED: {
+    label: "Unverified",
+    variant: "neutral",
+    icon: HelpCircle,
+    description: "Extracted, awaiting deterministic verification",
+  },
+};
 
 /**
- * Pre-configured status badge for evidence parser status.
+ * Pre-configured status badge for claim verification status.
+ * Status is always conveyed by icon + text, never color alone.
  */
+export function ClaimStatusBadge({ status, className }: { status: string; className?: string }) {
+  const meta = CLAIM_STATUS_META[status] ?? CLAIM_STATUS_META.UNVERIFIED;
+  const Icon = meta.icon;
+  return (
+    <Badge
+      variant={meta.variant}
+      className={className}
+      icon={<Icon className={iconCls} aria-hidden="true" />}
+      title={meta.description}
+    >
+      {meta.label}
+    </Badge>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Evidence parser status                                              */
+/* ------------------------------------------------------------------ */
+
 export function ParserStatusBadge({ status }: { status: string }) {
   switch (status) {
     case "PARSED":
       return (
-        <Badge variant="verified" icon={<CheckCircle2 className="w-3 h-3 text-status-success" aria-hidden="true" />}>
-          PARSED
+        <Badge variant="verified" icon={<CheckCircle2 className={iconCls} aria-hidden="true" />}>
+          Parsed
         </Badge>
       );
     case "PARTIAL":
       return (
-        <Badge variant="warning" icon={<AlertTriangle className="w-3 h-3 text-status-warning" aria-hidden="true" />}>
-          PARTIAL
+        <Badge variant="warning" icon={<AlertTriangle className={iconCls} aria-hidden="true" />}>
+          Partial
         </Badge>
       );
     case "PROCESSING":
       return (
-        <Badge variant="accent" icon={<Loader2 className="w-3 h-3 text-accent animate-spin" aria-hidden="true" />}>
-          PROCESSING
+        <Badge variant="info" icon={<Loader2 className={cn(iconCls, "animate-spin")} aria-hidden="true" />}>
+          Processing
         </Badge>
       );
     case "UNSUPPORTED":
       return (
-        <Badge variant="neutral" icon={<HelpCircle className="w-3 h-3 text-text-muted" aria-hidden="true" />}>
-          UNSUPPORTED
+        <Badge variant="neutral" icon={<HelpCircle className={iconCls} aria-hidden="true" />}>
+          Unsupported
         </Badge>
       );
     case "FAILED":
       return (
-        <Badge variant="danger" icon={<XCircle className="w-3 h-3 text-status-danger" aria-hidden="true" />}>
-          FAILED
+        <Badge variant="danger" icon={<XCircle className={iconCls} aria-hidden="true" />}>
+          Failed
         </Badge>
       );
     case "PENDING":
     default:
       return (
-        <Badge variant="neutral" icon={<Clock className="w-3 h-3 text-text-muted" aria-hidden="true" />}>
-          PENDING
+        <Badge variant="neutral" icon={<Clock className={iconCls} aria-hidden="true" />}>
+          Pending
         </Badge>
       );
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Event severity                                                      */
+/* ------------------------------------------------------------------ */
+
+export function SeverityBadge({ severity }: { severity?: string | null }) {
+  const s = (severity || "").toUpperCase();
+  if (s === "CRITICAL") {
+    return (
+      <Badge variant="danger" icon={<XCircle className={iconCls} aria-hidden="true" />}>
+        Critical
+      </Badge>
+    );
+  }
+  if (s === "WARNING") {
+    return (
+      <Badge variant="warning" icon={<AlertTriangle className={iconCls} aria-hidden="true" />}>
+        Warning
+      </Badge>
+    );
+  }
+  if (s === "INFO") {
+    return (
+      <Badge variant="outline" icon={<Info className={iconCls} aria-hidden="true" />}>
+        Info
+      </Badge>
+    );
+  }
+  return <Badge variant="outline">{severity || "—"}</Badge>;
+}
+
+/* ------------------------------------------------------------------ */
+/* Case status                                                         */
+/* ------------------------------------------------------------------ */
+
+export function CaseStatusBadge({ status }: { status: string }) {
+  switch (status) {
+    case "OPEN":
+      return (
+        <Badge variant="accent" icon={<CircleDot className={iconCls} aria-hidden="true" />}>
+          Open
+        </Badge>
+      );
+    case "CLOSED":
+      return (
+        <Badge variant="neutral" icon={<Lock className={iconCls} aria-hidden="true" />}>
+          Closed
+        </Badge>
+      );
+    case "ARCHIVED":
+      return (
+        <Badge variant="outline" icon={<Archive className={iconCls} aria-hidden="true" />}>
+          Archived
+        </Badge>
+      );
+    default:
+      return <Badge variant="outline">{status}</Badge>;
   }
 }

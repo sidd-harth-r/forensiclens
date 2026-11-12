@@ -1,194 +1,92 @@
-import { useState } from "react";
+import { ShieldCheck, Hash, Link as LinkIcon, History } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/Card";
+import { Panel } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/Table";
+import { HashValue, StatTile } from "@/components/ui/DataDisplay";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/Table";
+import { PreviewModuleNotice } from "@/components/common/Notice";
 import { FIXTURE_AUDIT_RECORDS, FIXTURE_AUDIT_INTEGRITY } from "@/fixtures/audit";
 import { formatHash, formatDateTime } from "@/lib/formatters";
-import {
-  ShieldCheck,
-  Hash,
-  Copy,
-  Link as LinkIcon,
-  RotateCcw,
-} from "lucide-react";
-import { toast } from "sonner";
 
 export function AuditPage() {
-  const [records] = useState(FIXTURE_AUDIT_RECORDS);
+  const records = FIXTURE_AUDIT_RECORDS;
   const integrity = FIXTURE_AUDIT_INTEGRITY;
 
-  const copyToClipboard = (text: string, label: string) => {
-    navigator.clipboard.writeText(text);
-    toast.success(`Copied ${label} to clipboard`);
-  };
-
   return (
-    <div className="space-y-6">
+    <>
       <PageHeader
-        title="Audit Chain & Reproducibility Ledger"
-        description="Cryptographically linked, tamper-evident audit log. Every material case action, hash re-verification, parser execution, and claim resolution appends a canonical record anchored by previous SHA-256 digests."
+        title="Audit Ledger"
+        meta={<Badge variant="warning">Preview</Badge>}
+        showFixtureBadge={false}
+        description="Planned tamper-evident ledger: each material case action appends a record anchored to the previous record's SHA-256 digest."
         actions={
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => toast.success("Audit chain verified: 5/5 block digests valid from Genesis")}
-          >
-            <ShieldCheck className="w-3.5 h-3.5 mr-1 text-status-success" />
-            Verify Hash Chain
+          <Button variant="outline" size="sm" disabled title="Chain verification is not implemented yet">
+            <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
+            Verify hash chain
           </Button>
         }
       />
 
-      {/* Hash Chain Integrity Summary Card */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card className="border-emerald-200 dark:border-emerald-950/60 shadow-xs">
-          <CardContent className="p-4">
-            <div className="text-xs text-text-muted font-medium flex items-center justify-between">
-              <span>Chain Integrity</span>
-              <ShieldCheck className="w-4 h-4 text-status-success" />
-            </div>
-            <div className="text-lg font-bold text-status-success mt-1 flex items-center gap-1.5">
-              <span>INTACT & VALID</span>
-            </div>
-            <div className="text-[10px] text-text-muted mt-0.5">
-              Total Sequences: {integrity.totalRecords}
-            </div>
-          </CardContent>
-        </Card>
+      <div className="space-y-5">
+        <PreviewModuleNotice module="Audit Ledger" />
 
-        <Card>
-          <CardContent className="p-4">
-            <div className="text-xs text-text-muted font-medium flex items-center justify-between">
-              <span>Genesis Digest</span>
-              <Hash className="w-4 h-4 text-text-disabled" />
-            </div>
-            <div className="font-mono text-xs text-text-primary truncate mt-1">
-              {formatHash(integrity.genesisHash, 6, 6)}
-            </div>
-            <div className="text-[10px] text-text-muted mt-0.5">
-              Root Anchor Block #1
-            </div>
-          </CardContent>
-        </Card>
+        <section aria-label="Sample chain summary" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <StatTile label="Records (sample)" value={integrity.totalRecords} icon={<History />} hint="Not verified — sample" />
+          <StatTile label="Genesis digest" value={<span className="text-sm">{formatHash(integrity.genesisHash, 6, 6)}</span>} icon={<Hash />} hint="Sample value" />
+          <StatTile label="Head digest" value={<span className="text-sm">{formatHash(integrity.headHash, 6, 6)}</span>} icon={<LinkIcon />} hint="Sample value" />
+          <StatTile label="Sample timestamp" value={<span className="text-sm">{formatDateTime(integrity.verifiedAt).slice(0, 10)}</span>} hint="Fixture metadata" />
+        </section>
 
-        <Card>
-          <CardContent className="p-4">
-            <div className="text-xs text-text-muted font-medium flex items-center justify-between">
-              <span>Head Hash (Latest)</span>
-              <LinkIcon className="w-4 h-4 text-accent" />
-            </div>
-            <div className="font-mono text-xs text-accent font-semibold truncate mt-1">
-              {formatHash(integrity.headHash, 6, 6)}
-            </div>
-            <div className="text-[10px] text-text-muted mt-0.5">
-              Anchor for BSA Certificate
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-4">
-            <div className="text-xs text-text-muted font-medium flex items-center justify-between">
-              <span>Last Verification</span>
-              <RotateCcw className="w-4 h-4 text-text-disabled" />
-            </div>
-            <div className="font-mono text-xs text-text-primary mt-1">
-              {formatDateTime(integrity.verifiedAt)}
-            </div>
-            <div className="text-[10px] text-text-muted mt-0.5">
-              Local Verification Active
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Audit Log Entries Table */}
-      <Card>
-        <CardHeader className="py-3 px-4">
-          <CardTitle>Canonical Chain Records (Chronological)</CardTitle>
-          <CardDescription>
-            Records are strictly append-only. Mutation of any previous entry invalidates subsequent hashes.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="p-0">
+        <Panel
+          title="Chain records"
+          description="Sample layout — append-only; mutating an entry would invalidate every later hash."
+          actions={<Badge variant="warning">Sample data</Badge>}
+          flush
+        >
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="w-16 text-center">Seq #</TableHead>
-                <TableHead className="w-32">Timestamp (UTC)</TableHead>
-                <TableHead className="w-36">Event Type</TableHead>
-                <TableHead className="w-28">Actor / Subsystem</TableHead>
-                <TableHead className="w-32">Target Object</TableHead>
-                <TableHead className="w-44">Record Hash (SHA-256)</TableHead>
-                <TableHead className="w-44">Previous Hash</TableHead>
-                <TableHead>Metadata Payload</TableHead>
+                <TableHead className="w-[60px] text-right">Seq</TableHead>
+                <TableHead className="w-[170px]">Timestamp (UTC)</TableHead>
+                <TableHead className="w-[150px]">Event</TableHead>
+                <TableHead className="w-[120px]">Actor</TableHead>
+                <TableHead className="w-[170px]">Object</TableHead>
+                <TableHead className="w-[170px]">Record hash</TableHead>
+                <TableHead className="w-[150px]">Previous hash</TableHead>
+                <TableHead>Metadata</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {records.map((rec) => (
                 <TableRow key={rec.auditId}>
-                  <TableCell className="text-center font-mono font-bold text-xs">
-                    #{rec.sequenceNo}
-                  </TableCell>
-
-                  <TableCell className="font-mono text-[11px] text-text-muted whitespace-nowrap">
-                    {formatDateTime(rec.createdAt)}
-                  </TableCell>
-
+                  <TableCell className="text-right font-mono text-xs">{rec.sequenceNo}</TableCell>
+                  <TableCell className="whitespace-nowrap font-mono text-2xs text-text-muted">{formatDateTime(rec.createdAt)}</TableCell>
                   <TableCell>
-                    <Badge variant="default" className="font-mono text-[10px]">
+                    <Badge variant="outline" mono>
                       {rec.eventType}
                     </Badge>
                   </TableCell>
-
-                  <TableCell className="text-xs text-text-secondary font-medium">
-                    {rec.actorId}
-                  </TableCell>
-
-                  <TableCell className="font-mono text-[11px] text-text-primary">
-                    <span className="text-[10px] text-text-muted mr-1">[{rec.objectType}]</span>
+                  <TableCell className="text-xs text-text-secondary">{rec.actorId}</TableCell>
+                  <TableCell className="font-mono text-xs">
+                    <span className="text-2xs text-text-muted">{rec.objectType} </span>
                     {rec.objectId}
                   </TableCell>
-
-                  <TableCell className="font-mono text-[11px] text-text-primary">
-                    <div className="flex items-center gap-1">
-                      <span title={rec.recordHash}>{formatHash(rec.recordHash, 6, 6)}</span>
-                      <button
-                        type="button"
-                        onClick={() => copyToClipboard(rec.recordHash, "Record Hash")}
-                        className="text-text-muted hover:text-text-primary p-0.5"
-                      >
-                        <Copy className="w-3 h-3" />
-                      </button>
-                    </div>
+                  <TableCell>
+                    <HashValue value={rec.recordHash} label="record hash" leading={6} trailing={6} />
                   </TableCell>
-
-                  <TableCell className="font-mono text-[11px] text-text-muted">
-                    {rec.prevHash ? (
-                      <span title={rec.prevHash}>{formatHash(rec.prevHash, 6, 6)}</span>
-                    ) : (
-                      <span className="text-text-disabled italic">Genesis</span>
-                    )}
+                  <TableCell className="font-mono text-2xs text-text-muted">
+                    {rec.prevHash ? <span title={rec.prevHash}>{formatHash(rec.prevHash, 6, 6)}</span> : <span className="italic">genesis</span>}
                   </TableCell>
-
-                  <TableCell className="font-mono text-[11px] text-text-secondary max-w-xs truncate">
+                  <TableCell className="max-w-xs truncate font-mono text-2xs text-text-secondary">
                     <span title={rec.metadataJson}>{rec.metadataJson}</span>
                   </TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
-        </CardContent>
-      </Card>
-    </div>
+        </Panel>
+      </div>
+    </>
   );
 }

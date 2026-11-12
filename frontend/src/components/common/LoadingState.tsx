@@ -1,16 +1,21 @@
 import { Loader2 } from "lucide-react";
+import { cn } from "@/lib/utils";
 
-export function LoadingState({ message = "Loading forensic data..." }: { message?: string }) {
+export function LoadingState({
+  message = "Loading forensic data…",
+  className,
+}: {
+  message?: string;
+  className?: string;
+}) {
   return (
     <div
       role="status"
       aria-live="polite"
-      className="flex flex-col items-center justify-center p-12 text-center"
+      className={cn("flex items-center justify-center gap-2.5 px-6 py-10 text-center", className)}
     >
-      <Loader2 className="w-6 h-6 animate-spin text-accent mb-3" />
-      <span className="text-xs font-medium text-text-muted">{message}</span>
-      <span className="sr-only">Loading</span>
+      <Loader2 className="h-4 w-4 animate-spin text-accent" aria-hidden="true" />
+      <span className="text-xs text-text-muted">{message}</span>
     </div>
   );
 }
-

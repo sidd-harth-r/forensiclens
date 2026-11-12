@@ -1,239 +1,213 @@
 import { useState } from "react";
+import { ChevronDown, ChevronRight, History, AlertTriangle, ShieldAlert, CheckCircle2, FileCode } from "lucide-react";
 import { ClaimVerificationResult } from "@/types/claims";
-import { ClaimStatusBadge } from "@/components/ui/Badge";
-import { formatDateTime } from "@/lib/formatters";
-import { LoadingState } from "@/components/common/LoadingState";
+import { ClaimStatusBadge, CLAIM_STATUS_META } from "@/components/ui/Badge";
+import { CardSkeleton } from "@/components/ui/Skeleton";
 import { ErrorState } from "@/components/common/ErrorState";
-import {
-  ShieldAlert,
-  ChevronDown,
-  ChevronRight,
-  Info,
-  CheckCircle2,
-  AlertTriangle,
-  History,
-  FileCode,
-} from "lucide-react";
+import { EmptyState } from "@/components/common/EmptyState";
+import { Notice } from "@/components/common/Notice";
+import { EvidenceText } from "@/components/ui/DataDisplay";
+import { formatDateTime } from "@/lib/formatters";
+import { cn } from "@/lib/utils";
 
 interface ClaimVerificationHistoryProps {
   history: ClaimVerificationResult[];
   loading?: boolean;
   error?: string | null;
+  onRetry?: () => void;
 }
 
-export function ClaimVerificationHistory({
-  history,
-  loading = false,
-  error = null,
-}: ClaimVerificationHistoryProps) {
+const railTone: Record<string, string> = {
+  SUPPORTED: "border-status-success text-status-success",
+  CONTRADICTED: "border-status-danger text-status-danger",
+  INSUFFICIENT_EVIDENCE: "border-status-warning text-status-warning",
+  UNVERIFIED: "border-border-strong text-text-muted",
+};
+
+/**
+ * Append-only verification audit trail, newest first (backend order).
+ */
+export function ClaimVerificationHistory({ history, loading = false, error = null, onRetry }: ClaimVerificationHistoryProps) {
   const [expandedItems, setExpandedItems] = useState<Record<string, boolean>>({});
 
   const toggleExpand = (verificationId: string) => {
-    setExpandedItems((prev) => ({
-      ...prev,
-      [verificationId]: !prev[verificationId],
-    }));
+    setExpandedItems((prev) => ({ ...prev, [verificationId]: !prev[verificationId] }));
   };
 
   if (loading) {
-    return <LoadingState message="Loading verification audit history..." />;
+    return (
+      <div className="space-y-3">
+        <CardSkeleton lines={2} />
+        <CardSkeleton lines={2} />
+      </div>
+    );
   }
 
   if (error) {
-    return (
-      <ErrorState
-        title="Failed to Load History"
-        message={error}
-      />
-    );
+    return <ErrorState inline title="Could not load verification history" message={error} onRetry={onRetry} />;
   }
 
   if (!history || history.length === 0) {
     return (
-      <div className="py-8 text-center border border-dashed border-border rounded-lg bg-surface-subtle/50">
-        <History className="w-8 h-8 text-text-muted mx-auto mb-2 opacity-50" />
-        <p className="text-sm font-medium text-text-primary">No Verification Attempts</p>
-        <p className="text-xs text-text-muted mt-1 max-w-sm mx-auto">
-          This claim has not been verified yet. Run deterministic verification to evaluate it against immutable case evidence.
-        </p>
-      </div>
+      <EmptyState
+        icon={<History />}
+        title="Not verified yet"
+        description="Run deterministic verification to evaluate this claim against stored case evidence. Each run is appended here."
+      />
     );
   }
 
   return (
     <div className="space-y-4">
-      {/* Append-only & Attribution Disclaimer Callout */}
-      <div className="flex items-start gap-2.5 p-3 rounded-md bg-blue-500/10 border border-blue-500/20 text-xs text-blue-800 dark:text-blue-300">
-        <Info className="w-4 h-4 shrink-0 mt-0.5 text-blue-500" />
-        <div className="space-y-1">
-          <p className="font-semibold text-blue-900 dark:text-blue-200">
-            Immutable Forensic Verification Audit Trail
-          </p>
-          <p>
-            Verification records are append-only and cannot be altered or removed. Outcomes reflect deterministic
-            predicate evaluation against forensic case databases.
-          </p>
-          <p className="font-medium text-blue-900/90 dark:text-blue-200/90 italic">
-            Forensic verification outcome does not infer physical human identity attribution.
-          </p>
-        </div>
-      </div>
+      <Notice tone="info" title="Append-only audit trail">
+        Verification records cannot be edited or removed. Outcomes reflect deterministic predicate evaluation against the
+        case database and do not by themselves attribute actions to a physical person.
+      </Notice>
 
-      {/* History Items in Reverse Chronological Order */}
-      <div className="space-y-3">
+      <ol className="relative space-y-3 pl-6" aria-label="Verification runs, newest first">
+        <span className="absolute bottom-2 left-[9px] top-2 w-px bg-border" aria-hidden="true" />
         {history.map((record, index) => {
           const isExpanded = !!expandedItems[record.verificationId];
+          const Meta = CLAIM_STATUS_META[record.status] ?? CLAIM_STATUS_META.UNVERIFIED;
+          const Icon = Meta.icon;
           const hasDetails =
             (record.resolvedParameters && Object.keys(record.resolvedParameters).length > 0) ||
-            (record.discrepancies && record.discrepancies.length > 0) ||
             (record.supportingRecords && record.supportingRecords.length > 0) ||
             (record.contradictingRecords && record.contradictingRecords.length > 0);
+          const detailsId = `vr-details-${record.verificationId || index}`;
 
           return (
-            <div
-              key={record.verificationId || index}
-              className="border border-border rounded-lg bg-surface p-4 transition-all hover:border-border/80 shadow-xs"
-            >
-              {/* Header: Status, Timestamp, Rule */}
-              <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-border/60">
-                <div className="flex items-center gap-2">
-                  <ClaimStatusBadge status={record.status} />
-                  <span className="font-mono text-xs font-semibold text-text-primary">
-                    {record.ruleId}
-                  </span>
-                  <span className="text-[11px] font-mono text-text-muted">
-                    v{record.ruleVersion}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2 text-xs text-text-muted">
-                  <span className="font-mono">{formatDateTime(record.verifiedAt)}</span>
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface-subtle font-mono text-text-secondary">
-                    engine v{record.verifierVersion}
-                  </span>
-                </div>
-              </div>
+            <li key={record.verificationId || index} className="relative">
+              <span
+                className={cn(
+                  "absolute -left-6 top-3 flex h-[18px] w-[18px] items-center justify-center rounded-full border bg-surface",
+                  railTone[record.status] ?? railTone.UNVERIFIED
+                )}
+                aria-hidden="true"
+              >
+                <Icon className="h-2.5 w-2.5" />
+              </span>
 
-              {/* Body: Explanation & Predicate */}
-              <div className="mt-3 space-y-2 text-xs">
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-text-secondary">
-                  <div>
-                    <span className="text-text-muted font-medium">Predicate: </span>
-                    <span className="font-mono font-medium text-text-primary">{record.predicateType}</span>
-                  </div>
-                  <div>
-                    <span className="text-text-muted font-medium">Matched Records: </span>
-                    <span className="font-mono font-semibold text-text-primary">{record.matchedRowCount}</span>
-                  </div>
-                  {record.evidenceRefs && record.evidenceRefs.length > 0 && (
-                    <div>
-                      <span className="text-text-muted font-medium">Evidence Files: </span>
-                      <span className="font-mono text-text-secondary">
-                        {record.evidenceRefs.join(", ")}
+              <article className="rounded-md border border-border bg-surface">
+                <header className="flex flex-wrap items-center justify-between gap-2 border-b border-border-subtle px-3 py-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <ClaimStatusBadge status={record.status} />
+                    {index === 0 && (
+                      <span className="rounded-sm border border-accent/30 bg-accent-subtle px-1 text-2xs font-medium text-accent-text">
+                        Latest
                       </span>
+                    )}
+                    <span className="font-mono text-xs text-text-primary">{record.ruleId}</span>
+                    <span className="font-mono text-2xs text-text-muted">v{record.ruleVersion}</span>
+                  </div>
+                  <time className="font-mono text-2xs text-text-muted" dateTime={record.verifiedAt}>
+                    {formatDateTime(record.verifiedAt)}
+                  </time>
+                </header>
+
+                <div className="space-y-2.5 px-3 py-2.5 text-xs">
+                  <dl className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-4">
+                    <div>
+                      <dt className="label-caps">Predicate</dt>
+                      <dd className="font-mono text-text-primary">{record.predicateType}</dd>
+                    </div>
+                    <div>
+                      <dt className="label-caps">Matched rows</dt>
+                      <dd className="font-mono text-text-primary">{record.matchedRowCount}</dd>
+                    </div>
+                    <div>
+                      <dt className="label-caps">Engine</dt>
+                      <dd className="font-mono text-text-secondary">v{record.verifierVersion}</dd>
+                    </div>
+                    <div className="min-w-0">
+                      <dt className="label-caps">Evidence files</dt>
+                      <dd className="truncate font-mono text-text-secondary" title={record.evidenceRefs?.join(", ")}>
+                        {record.evidenceRefs?.length ? record.evidenceRefs.join(", ") : "—"}
+                      </dd>
+                    </div>
+                  </dl>
+
+                  {record.explanation && <p className="leading-relaxed text-text-secondary">{record.explanation}</p>}
+
+                  {record.failureReason && record.status !== "SUPPORTED" && (
+                    <p className="flex items-start gap-1.5 text-status-warning">
+                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                      <span>
+                        <span className="font-medium">Reason:</span> {record.failureReason}
+                      </span>
+                    </p>
+                  )}
+
+                  {record.discrepancies && record.discrepancies.length > 0 && (
+                    <div className="rounded border border-status-danger/30 bg-status-danger-bg px-2.5 py-2">
+                      <p className="mb-1 flex items-center gap-1.5 font-medium text-status-danger">
+                        <ShieldAlert className="h-3.5 w-3.5" aria-hidden="true" />
+                        Discrepancies ({record.discrepancies.length})
+                      </p>
+                      <ul className="list-disc space-y-0.5 pl-5 text-text-secondary">
+                        {record.discrepancies.map((d, i) => (
+                          <li key={i}>{d}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {hasDetails && (
+                    <div>
+                      <button
+                        type="button"
+                        onClick={() => toggleExpand(record.verificationId)}
+                        aria-expanded={isExpanded}
+                        aria-controls={detailsId}
+                        className="inline-flex items-center gap-1 rounded text-2xs font-medium text-text-secondary hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                      >
+                        {isExpanded ? <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" /> : <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />}
+                        Technical details and matched records
+                      </button>
+
+                      {isExpanded && (
+                        <div id={detailsId} className="mt-2 space-y-3">
+                          {record.resolvedParameters && Object.keys(record.resolvedParameters).length > 0 && (
+                            <div>
+                              <p className="mb-1 flex items-center gap-1.5 text-2xs font-medium text-text-secondary">
+                                <FileCode className="h-3 w-3" aria-hidden="true" />
+                                Evaluated parameters
+                              </p>
+                              <EvidenceText wrap={false}>{JSON.stringify(record.resolvedParameters, null, 2)}</EvidenceText>
+                            </div>
+                          )}
+                          {record.supportingRecords && record.supportingRecords.length > 0 && (
+                            <div>
+                              <p className="mb-1 flex items-center gap-1.5 text-2xs font-medium text-status-success">
+                                <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
+                                Supporting records ({record.supportingRecords.length})
+                              </p>
+                              <EvidenceText wrap={false} maxHeightClass="max-h-40">
+                                {JSON.stringify(record.supportingRecords, null, 2)}
+                              </EvidenceText>
+                            </div>
+                          )}
+                          {record.contradictingRecords && record.contradictingRecords.length > 0 && (
+                            <div>
+                              <p className="mb-1 flex items-center gap-1.5 text-2xs font-medium text-status-danger">
+                                <ShieldAlert className="h-3 w-3" aria-hidden="true" />
+                                Contradicting records ({record.contradictingRecords.length})
+                              </p>
+                              <EvidenceText wrap={false} maxHeightClass="max-h-40">
+                                {JSON.stringify(record.contradictingRecords, null, 2)}
+                              </EvidenceText>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
-
-                {/* Explanation */}
-                {record.explanation && (
-                  <p className="text-xs text-text-primary leading-relaxed bg-surface-subtle/50 p-2.5 rounded border border-border/40">
-                    {record.explanation}
-                  </p>
-                )}
-
-                {/* Failure Reason */}
-                {record.failureReason && record.status !== "SUPPORTED" && (
-                  <div className="flex items-start gap-2 p-2 rounded bg-amber-500/10 border border-amber-500/20 text-amber-800 dark:text-amber-300">
-                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-500" />
-                    <div>
-                      <span className="font-semibold">Reason: </span>
-                      <span>{record.failureReason}</span>
-                    </div>
-                  </div>
-                )}
-
-                {/* Discrepancies */}
-                {record.discrepancies && record.discrepancies.length > 0 && (
-                  <div className="p-2 rounded bg-red-500/10 border border-red-500/20 text-red-800 dark:text-red-300 space-y-1">
-                    <div className="flex items-center gap-1.5 font-semibold">
-                      <ShieldAlert className="w-3.5 h-3.5 text-red-500" />
-                      <span>Identified Discrepancies ({record.discrepancies.length})</span>
-                    </div>
-                    <ul className="list-disc list-inside space-y-0.5 text-[11px] pl-1">
-                      {record.discrepancies.map((disc, dIdx) => (
-                        <li key={dIdx}>{disc}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {/* Expandable Technical Details */}
-                {hasDetails && (
-                  <div className="pt-2">
-                    <button
-                      type="button"
-                      onClick={() => toggleExpand(record.verificationId)}
-                      className="inline-flex items-center gap-1 text-[11px] font-medium text-text-secondary hover:text-text-primary transition-colors cursor-pointer"
-                    >
-                      {isExpanded ? (
-                        <ChevronDown className="w-3.5 h-3.5" />
-                      ) : (
-                        <ChevronRight className="w-3.5 h-3.5" />
-                      )}
-                      <span>
-                        {isExpanded ? "Hide" : "Show"} Technical Verification Details & Records
-                      </span>
-                    </button>
-
-                    {isExpanded && (
-                      <div className="mt-2.5 space-y-3 pt-2 border-t border-border/50 animate-in fade-in duration-150">
-                        {/* Resolved Parameters */}
-                        {record.resolvedParameters && Object.keys(record.resolvedParameters).length > 0 && (
-                          <div>
-                            <div className="flex items-center gap-1.5 text-[11px] font-semibold text-text-secondary mb-1">
-                              <FileCode className="w-3 h-3" />
-                              <span>Evaluated Parameters</span>
-                            </div>
-                            <pre className="font-mono text-[11px] bg-surface-subtle p-2 rounded border border-border/50 overflow-x-auto text-text-primary">
-                              {JSON.stringify(record.resolvedParameters, null, 2)}
-                            </pre>
-                          </div>
-                        )}
-
-                        {/* Supporting Records Preview */}
-                        {record.supportingRecords && record.supportingRecords.length > 0 && (
-                          <div>
-                            <div className="flex items-center gap-1.5 text-[11px] font-semibold text-status-success mb-1">
-                              <CheckCircle2 className="w-3 h-3" />
-                              <span>Supporting Records ({record.supportingRecords.length})</span>
-                            </div>
-                            <pre className="font-mono text-[11px] bg-status-success-bg/20 p-2 rounded border border-status-success/20 overflow-x-auto text-text-primary max-h-40">
-                              {JSON.stringify(record.supportingRecords, null, 2)}
-                            </pre>
-                          </div>
-                        )}
-
-                        {/* Contradicting Records Preview */}
-                        {record.contradictingRecords && record.contradictingRecords.length > 0 && (
-                          <div>
-                            <div className="flex items-center gap-1.5 text-[11px] font-semibold text-status-danger mb-1">
-                              <ShieldAlert className="w-3 h-3" />
-                              <span>Contradicting Records ({record.contradictingRecords.length})</span>
-                            </div>
-                            <pre className="font-mono text-[11px] bg-status-danger-bg/20 p-2 rounded border border-status-danger/20 overflow-x-auto text-text-primary max-h-40">
-                              {JSON.stringify(record.contradictingRecords, null, 2)}
-                            </pre>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
+              </article>
+            </li>
           );
         })}
-      </div>
+      </ol>
     </div>
   );
 }

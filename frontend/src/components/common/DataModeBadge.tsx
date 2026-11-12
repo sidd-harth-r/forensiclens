@@ -1,29 +1,31 @@
 import { isApiMode, API_BASE_URL } from "@/services/apiClient";
-import { Zap, Database } from "lucide-react";
+import { Database, Server } from "lucide-react";
+import { Badge } from "@/components/ui/Badge";
 
+/**
+ * Shows which data source the UI is bound to. Fixture mode is always
+ * flagged in amber so sample data can never be mistaken for case evidence.
+ */
 export function DataModeBadge() {
   if (isApiMode) {
     return (
-      <div
-        className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-mono font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
-        title={`Live API connected to ${API_BASE_URL || "local backend"}`}
+      <Badge
+        variant="outline"
+        icon={<Server className="h-3 w-3" aria-hidden="true" />}
+        title={`Bound to backend API ${API_BASE_URL || "(same origin)"}`}
       >
-        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-        <Zap className="w-3 h-3 text-emerald-500" />
-        <span>LIVE API</span>
-      </div>
+        Live API
+      </Badge>
     );
   }
 
   return (
-    <div
-      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-mono font-medium bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20"
-      title="Running in mock fixture mode (VITE_DATA_MODE=fixtures)"
+    <Badge
+      variant="warning"
+      icon={<Database className="h-3 w-3" aria-hidden="true" />}
+      title="VITE_DATA_MODE=fixtures — sample data, not case evidence"
     >
-      <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-      <Database className="w-3 h-3 text-amber-500" />
-      <span>FIXTURE MODE</span>
-    </div>
+      Fixture data
+    </Badge>
   );
 }
-

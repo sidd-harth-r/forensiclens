@@ -1,22 +1,14 @@
-import { useState, useEffect } from "react";
-import { Link } from "react-router-dom";
-import { Button } from "@/components/ui/Button";
-import { Badge } from "@/components/ui/Badge";
-import { LoadingState } from "@/components/common/LoadingState";
+import { useState, useEffect, useCallback } from "react";
+import { ArrowRight, FileText, Hash, ShieldCheck } from "lucide-react";
+import { Drawer } from "@/components/ui/Dialog";
+import { Badge, SeverityBadge } from "@/components/ui/Badge";
+import { LinkButton } from "@/components/ui/Button";
+import { HashValue, IdValue, KeyValueGrid, CopyButton, EvidenceText, Timestamp } from "@/components/ui/DataDisplay";
+import { CardSkeleton } from "@/components/ui/Skeleton";
 import { ErrorState } from "@/components/common/ErrorState";
 import { getEventById } from "@/services/events";
-import { EventSeverity, ForensicEvent } from "@/types/event";
-import { formatDateTime } from "@/lib/formatters";
-import {
-  FileText,
-  X,
-  Copy,
-  Hash,
-  ShieldCheck,
-  HardDrive,
-  ArrowRight,
-} from "lucide-react";
-import { toast } from "sonner";
+import { ForensicEvent } from "@/types/event";
+import { formatDateTime, describeError } from "@/lib/formatters";
 
 interface EventInspectorModalProps {
   eventId: string | null;
@@ -24,14 +16,34 @@ interface EventInspectorModalProps {
   onClose: () => void;
 }
 
-export function EventInspectorModal({
-  eventId,
-  caseId,
-  onClose,
-}: EventInspectorModalProps) {
+/**
+ * Normalized event inspector with full provenance chain:
+ * evidence file → raw record → normalized event.
+ * Rendered as a side drawer so the originating list stays in view.
+ */
+export function EventInspectorModal({ eventId, caseId, onClose }: EventInspectorModalProps) {
   const [detail, setDetail] = useState<ForensicEvent | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(
+    (isCurrent: () => boolean = () => true) => {
+      if (!eventId || !caseId) return;
+      setLoading(true);
+      setError(null);
+      getEventById(caseId, eventId)
+        .then((res) => {
+          if (isCurrent()) setDetail(res);
+        })
+        .catch((err) => {
+          if (isCurrent()) setError(describeError(err, "Failed to load event details"));
+        })
+        .finally(() => {
+          if (isCurrent()) setLoading(false);
+        });
+    },
+    [eventId, caseId]
+  );
 
   useEffect(() => {
     if (!eventId || !caseId) {
@@ -40,402 +52,205 @@ export function EventInspectorModal({
       setError(null);
       return;
     }
-
-    let isCurrent = true;
-    setLoading(true);
-    setError(null);
-
-    getEventById(caseId, eventId)
-      .then((res) => {
-        if (isCurrent) {
-          setDetail(res);
-        }
-      })
-      .catch((err) => {
-        if (isCurrent) {
-          setError(err instanceof Error ? err.message : "Failed to load event details");
-        }
-      })
-      .finally(() => {
-        if (isCurrent) {
-          setLoading(false);
-        }
-      });
-
+    let current = true;
+    load(() => current);
     return () => {
-      isCurrent = false;
+      current = false;
     };
-  }, [eventId, caseId]);
+  }, [eventId, caseId, load]);
 
-  if (!eventId) {
-    return null;
-  }
-
-  const copyToClipboard = (text: string, label: string) => {
-    navigator.clipboard.writeText(text);
-    toast.success(`Copied ${label} to clipboard`);
-  };
-
-  const getSeverityBadgeVariant = (severity: EventSeverity) => {
-    switch (severity) {
-      case "CRITICAL":
-        return "danger";
-      case "WARNING":
-        return "warning";
-      case "INFO":
-      default:
-        return "default";
-    }
-  };
+  const fileName = detail?.evidenceOriginalName || detail?.sourceFileName || null;
 
   return (
-    <div
-      className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Forensic Event Inspector"
+    <Drawer
+      open={!!eventId}
+      onClose={onClose}
+      width="lg"
+      eyebrow={
+        <>
+          <Badge variant="outline" icon={<FileText className="h-3 w-3" aria-hidden="true" />}>
+            Event
+          </Badge>
+          {detail && <SeverityBadge severity={detail.severity} />}
+          {eventId && <IdValue value={eventId} label="event ID" className="text-text-muted" />}
+        </>
+      }
+      title={detail ? <span className="font-mono">{detail.eventType}</span> : "Event inspector"}
+      description={detail ? <Timestamp utc={detail.timestampUtc} original={detail.timestampOriginal} showZone className="font-mono" /> : undefined}
+      footer={
+        <>
+          <span className="text-2xs text-text-muted">Source data is rendered as passive text, never executed.</span>
+          <LinkButton to="/evidence" variant="outline" size="sm" onClick={onClose}>
+            Evidence
+            <ArrowRight className="h-3 w-3" aria-hidden="true" />
+          </LinkButton>
+        </>
+      }
     >
-      <div className="bg-surface border border-border rounded-lg max-w-3xl w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-        {/* Modal Header */}
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-border bg-surface-subtle shrink-0">
-          <div className="flex items-center gap-2">
-            <FileText className="w-4 h-4 text-accent" />
-            <h3 className="text-sm font-semibold text-text-primary">
-              Forensic Event Inspector
+      {loading && (
+        <div className="space-y-3">
+          <CardSkeleton lines={3} />
+          <CardSkeleton lines={4} />
+        </div>
+      )}
+
+      {error && !loading && <ErrorState title="Could not load event" message={error} onRetry={() => load()} />}
+
+      {!loading && !error && detail && (
+        <div className="space-y-6">
+          {/* Provenance chain */}
+          <section aria-labelledby="evt-chain">
+            <h3 id="evt-chain" className="label-caps mb-2 flex items-center gap-1.5">
+              <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
+              Provenance chain
             </h3>
-            <span className="font-mono text-xs text-text-muted px-2 py-0.5 rounded bg-surface border border-border">
-              {eventId}
-            </span>
-            <button
-              type="button"
-              onClick={() => copyToClipboard(eventId, "Event ID")}
-              className="text-text-muted hover:text-text-primary p-0.5"
-              title="Copy Event ID"
-              aria-label="Copy Event ID"
-            >
-              <Copy className="w-3 h-3" />
-            </button>
-          </div>
+            <ol className="grid grid-cols-1 gap-px overflow-hidden rounded border border-border bg-border sm:grid-cols-3">
+              {[
+                { k: "Evidence file", v: fileName ?? detail.evidenceId, sub: detail.evidenceId },
+                {
+                  k: "Raw record",
+                  v: detail.rawRecordId ?? "Not recorded",
+                  sub:
+                    detail.lineNumber != null
+                      ? `line ${detail.lineNumber}${detail.recordNo != null ? ` · rec #${detail.recordNo}` : ""}`
+                      : detail.recordNo != null
+                      ? `rec #${detail.recordNo}`
+                      : undefined,
+                },
+                { k: "Normalized event", v: detail.eventId, sub: detail.eventType },
+              ].map((step, i) => (
+                <li key={step.k} className="relative bg-surface-subtle px-3 py-2">
+                  <span className="label-caps">
+                    {i + 1}. {step.k}
+                  </span>
+                  <span className="mt-0.5 block truncate font-mono text-xs text-text-primary" title={step.v}>
+                    {step.v}
+                  </span>
+                  {step.sub && <span className="block truncate font-mono text-2xs text-text-muted">{step.sub}</span>}
+                </li>
+              ))}
+            </ol>
+          </section>
 
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-text-muted hover:text-text-primary p-1 rounded hover:bg-surface"
-            aria-label="Close Inspector"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
+          {/* Raw source */}
+          <section aria-labelledby="evt-raw">
+            <div className="mb-2 flex items-center justify-between">
+              <h3 id="evt-raw" className="label-caps flex items-center gap-1.5">
+                <FileText className="h-3.5 w-3.5" aria-hidden="true" />
+                Raw source line
+              </h3>
+              {detail.rawText && <CopyButton value={detail.rawText} label="raw line" />}
+            </div>
+            {detail.rawText ? (
+              <EvidenceText wrap={false}>{detail.rawText}</EvidenceText>
+            ) : (
+              <p className="rounded border border-dashed border-border px-3 py-2 text-xs text-text-muted">
+                Raw record text is not available for this event.
+              </p>
+            )}
+            {detail.parseError && (
+              <p className="mt-2 text-xs text-status-warning">Parse error: {detail.parseError}</p>
+            )}
+          </section>
 
-        {/* Modal Scrollable Content */}
-        <div className="overflow-y-auto p-5 space-y-5">
-          {loading && (
-            <LoadingState message="Retrieving event details and raw record provenance..." />
-          )}
-
-          {error && (
-            <ErrorState
-              title="Failed to Load Event Details"
-              message={error}
-              onRetry={() => {
-                if (eventId && caseId) {
-                  setLoading(true);
-                  setError(null);
-                  getEventById(caseId, eventId)
-                    .then(setDetail)
-                    .catch((err) => setError(err.message))
-                    .finally(() => setLoading(false));
-                }
-              }}
+          {/* Normalized fields */}
+          <section aria-labelledby="evt-fields">
+            <h3 id="evt-fields" className="label-caps mb-2 flex items-center gap-1.5">
+              <Hash className="h-3.5 w-3.5" aria-hidden="true" />
+              Normalized fields
+            </h3>
+            <KeyValueGrid
+              columns={3}
+              items={[
+                { label: "Event type", value: detail.eventType, mono: true },
+                { label: "Severity", value: <SeverityBadge severity={detail.severity} /> },
+                { label: "Parse status", value: detail.parseStatus, mono: true },
+                { label: "User", value: detail.userValue, mono: true },
+                {
+                  label: "Source IP",
+                  value: detail.srcIp ? (
+                    <span className="inline-flex items-center gap-1.5">
+                      {detail.srcIp}
+                      {detail.srcPort ? `:${detail.srcPort}` : ""}
+                      {detail.srcIpScope && (
+                        <Badge variant="outline" className="font-sans">
+                          {detail.srcIpScope}
+                        </Badge>
+                      )}
+                    </span>
+                  ) : null,
+                  mono: true,
+                },
+                { label: "Host", value: detail.host, mono: true },
+                {
+                  label: "Process",
+                  value: detail.process ? `${detail.process}${detail.pid ? ` [${detail.pid}]` : ""}` : null,
+                  mono: true,
+                },
+                { label: "Command", value: detail.commandValue, mono: true },
+                { label: "Resource", value: detail.resource, mono: true },
+                { label: "Source", value: detail.source, mono: true },
+                { label: "Message", value: detail.message, mono: true, wide: true },
+              ]}
             />
-          )}
+          </section>
 
-          {!loading && !error && detail && (
-            <>
-              {/* 1. Event Details Section */}
-              <div className="space-y-2">
-                <h4 className="text-xs font-semibold uppercase tracking-wider text-text-muted flex items-center gap-1.5">
-                  <Hash className="w-3.5 h-3.5 text-accent" />
-                  Event Details
-                </h4>
+          {/* Time */}
+          <section aria-labelledby="evt-time">
+            <h3 id="evt-time" className="label-caps mb-2">
+              Time
+            </h3>
+            <KeyValueGrid
+              columns={3}
+              items={[
+                {
+                  label: "Timestamp (UTC)",
+                  value: detail.timestampUtc ? formatDateTime(detail.timestampUtc) : <span className="text-text-muted">Not normalized</span>,
+                  mono: true,
+                },
+                { label: "Original timestamp", value: detail.timestampOriginal, mono: true },
+                {
+                  label: "Confidence",
+                  value: detail.timestampConfidence
+                    ? `${detail.timestampConfidence}${detail.tzAssumed ? ` (tz ${detail.tzAssumed})` : ""}`
+                    : null,
+                  mono: true,
+                },
+              ]}
+            />
+          </section>
 
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 p-3.5 rounded-lg border border-border bg-surface-subtle text-xs">
-                  <div>
-                    <span className="text-text-muted block text-[11px]">Event Type</span>
-                    <span className="font-mono font-semibold text-text-primary">
-                      {detail.eventType}
-                    </span>
-                  </div>
-
-                  <div>
-                    <span className="text-text-muted block text-[11px]">Severity</span>
-                    <div className="mt-0.5">
-                      <Badge
-                        variant={getSeverityBadgeVariant(
-                          detail.severity as EventSeverity
-                        )}
-                      >
-                        {detail.severity}
-                      </Badge>
-                    </div>
-                  </div>
-
-                  <div>
-                    <span className="text-text-muted block text-[11px]">User Account</span>
-                    <span className="font-mono font-medium text-text-primary">
-                      {detail.userValue || "—"}
-                    </span>
-                  </div>
-
-                  <div>
-                    <span className="text-text-muted block text-[11px]">Source IP & Port</span>
-                    <span className="font-mono text-text-primary">
-                      {detail.srcIp
-                        ? `${detail.srcIp}${
-                            detail.srcPort ? `:${detail.srcPort}` : ""
-                          }`
-                        : "—"}
-                    </span>
-                    {detail.srcIpScope && (
-                      <span className="ml-1 text-[10px] px-1 py-0.2 rounded bg-surface border border-border text-text-muted">
-                        {detail.srcIpScope}
-                      </span>
-                    )}
-                  </div>
-
-                  <div>
-                    <span className="text-text-muted block text-[11px]">Host</span>
-                    <span className="font-mono text-text-primary">
-                      {detail.host || "—"}
-                    </span>
-                  </div>
-
-                  <div>
-                    <span className="text-text-muted block text-[11px]">Process & PID</span>
-                    <span className="font-mono text-text-primary">
-                      {detail.process
-                        ? `${detail.process}${
-                            detail.pid ? ` [${detail.pid}]` : ""
-                          }`
-                        : "—"}
-                    </span>
-                  </div>
-
-                  <div>
-                    <span className="text-text-muted block text-[11px]">Timestamp (UTC)</span>
-                    <span className="font-mono text-text-primary">
-                      {formatDateTime(detail.timestampUtc) || "—"}
-                    </span>
-                  </div>
-
-                  <div>
-                    <span className="text-text-muted block text-[11px]">Original Timestamp</span>
-                    <span className="font-mono text-text-secondary">
-                      {detail.timestampOriginal || "—"}
-                    </span>
-                  </div>
-
-                  <div>
-                    <span className="text-text-muted block text-[11px]">Confidence / Timezone</span>
-                    <span className="font-mono text-text-secondary">
-                      {detail.timestampConfidence || "EXACT"}{" "}
-                      {detail.tzAssumed ? `(${detail.tzAssumed})` : ""}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Normalized Message */}
-                <div className="p-3 rounded-lg border border-border bg-surface-subtle">
-                  <span className="text-[11px] font-medium text-text-muted block mb-1">
-                    Normalized Message Payload
-                  </span>
-                  <p className="font-mono text-xs text-text-primary break-all select-all">
-                    {detail.message}
-                  </p>
-                </div>
-              </div>
-
-              {/* 2. Provenance Trace Section */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-semibold uppercase tracking-wider text-text-muted flex items-center gap-1.5">
-                    <ShieldCheck className="w-3.5 h-3.5 text-status-success" />
-                    Provenance Trace
-                  </h4>
-
-                  <Link to="/evidence">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="text-xs h-6 text-accent hover:text-accent-hover gap-1"
-                    >
-                      <HardDrive className="w-3 h-3" />
-                      <span>View Evidence Explorer</span>
-                      <ArrowRight className="w-3 h-3" />
-                    </Button>
-                  </Link>
-                </div>
-
-                {/* Provenance Flow Pill */}
-                <div className="flex items-center gap-2 p-2 rounded bg-surface-subtle border border-border font-mono text-[11px] text-text-secondary flex-wrap">
-                  <span className="font-semibold text-text-primary">
-                    {detail.evidenceOriginalName ||
-                      detail.sourceFileName ||
-                      "auth.log"}
-                  </span>
-                  <ArrowRight className="w-3 h-3 text-text-muted" />
-                  <span className="text-accent">
-                    {detail.rawRecordId || "RAW_RECORD"}
-                  </span>
-                  <ArrowRight className="w-3 h-3 text-text-muted" />
-                  <span className="text-status-success font-semibold">
-                    {detail.eventId}
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 p-3.5 rounded-lg border border-border bg-surface-subtle text-xs">
-                  <div>
-                    <span className="text-text-muted block text-[11px]">Evidence File</span>
-                    <span className="font-mono text-text-primary font-medium">
-                      {detail.evidenceOriginalName ||
-                        detail.sourceFileName ||
-                        "auth.log"}
-                    </span>
-                  </div>
-
-                  <div>
-                    <span className="text-text-muted block text-[11px]">Evidence ID</span>
-                    <div className="flex items-center gap-1 font-mono text-text-primary">
-                      <span className="truncate">{detail.evidenceId}</span>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          copyToClipboard(detail.evidenceId, "Evidence ID")
-                        }
-                        className="text-text-muted hover:text-text-primary p-0.5"
-                        title="Copy Evidence ID"
-                      >
-                        <Copy className="w-3 h-3" />
-                      </button>
-                    </div>
-                  </div>
-
-                  <div>
-                    <span className="text-text-muted block text-[11px]">Parser Engine</span>
-                    <Badge variant="default" className="font-mono text-[11px]">
-                      {detail.evidenceFormat ||
-                        detail.source ||
-                        "OPENSSH"}
-                    </Badge>
-                  </div>
-
-                  <div>
-                    <span className="text-text-muted block text-[11px]">Raw Record ID</span>
-                    <span className="font-mono text-text-secondary">
-                      {detail.rawRecordId || "—"}
-                    </span>
-                  </div>
-
-                  <div>
-                    <span className="text-text-muted block text-[11px]">Line Number</span>
-                    <span className="font-mono font-medium text-text-primary">
-                      {detail.lineNumber != null
-                        ? `Line ${detail.lineNumber}`
-                        : "—"}
-                    </span>
-                  </div>
-
-                  <div>
-                    <span className="text-text-muted block text-[11px]">Byte Range Offsets</span>
-                    <span className="font-mono text-text-primary">
-                      {detail.byteStart != null &&
-                      detail.byteEnd != null
-                        ? `${detail.byteStart} – ${detail.byteEnd} (${
-                            detail.byteEnd - detail.byteStart
-                          } B)`
-                        : "—"}
-                    </span>
-                  </div>
-
-                  <div className="col-span-2 sm:col-span-3">
-                    <span className="text-text-muted block text-[11px]">
-                      Canonical Event Hash (SHA-256)
-                    </span>
-                    <div className="flex items-center gap-1.5 font-mono text-[11px] text-text-primary mt-0.5">
-                      <span className="break-all">{detail.eventHash}</span>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          copyToClipboard(detail.eventHash, "Event Hash")
-                        }
-                        className="text-text-muted hover:text-text-primary p-0.5 shrink-0"
-                        title="Copy SHA-256 Event Hash"
-                      >
-                        <Copy className="w-3 h-3" />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* 3. Raw Evidence Section */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-semibold uppercase tracking-wider text-text-muted flex items-center gap-1.5">
-                    <FileText className="w-3.5 h-3.5 text-accent" />
-                    Raw Source Evidence Line
-                  </h4>
-
-                  <div className="flex items-center gap-2">
-                    {detail.lineNumber != null && (
-                      <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-surface border border-border text-text-muted">
-                        Line {detail.lineNumber}
-                      </span>
-                    )}
-                    {detail.rawText && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="text-xs h-6 gap-1"
-                        onClick={() =>
-                          copyToClipboard(detail.rawText!, "Raw Evidence Line")
-                        }
-                      >
-                        <Copy className="w-3 h-3" />
-                        <span>Copy Raw Line</span>
-                      </Button>
-                    )}
-                  </div>
-                </div>
-
-                <div className="p-3.5 rounded-lg border border-border bg-neutral-950 text-neutral-100 font-mono text-xs overflow-x-auto select-all">
-                  <pre className="whitespace-pre break-all">
-                    {detail.rawText ||
-                      `// Raw record text unavailable for ${detail.eventId}`}
-                  </pre>
-                </div>
-
-                <p className="text-[11px] text-text-muted italic">
-                  Immutable forensic source data captured during ingestion. Rendered strictly as
-                  passive text without execution.
-                </p>
-              </div>
-            </>
-          )}
+          {/* Location in evidence */}
+          <section aria-labelledby="evt-location">
+            <h3 id="evt-location" className="label-caps mb-2">
+              Location in evidence
+            </h3>
+            <KeyValueGrid
+              columns={3}
+              items={[
+                { label: "Evidence file", value: fileName, mono: true },
+                { label: "Evidence ID", value: <IdValue value={detail.evidenceId} label="evidence ID" /> },
+                { label: "Format", value: detail.evidenceFormat, mono: true },
+                { label: "Line", value: detail.lineNumber, mono: true },
+                { label: "Record #", value: detail.recordNo, mono: true },
+                {
+                  label: "Byte range",
+                  value:
+                    detail.byteStart != null && detail.byteEnd != null
+                      ? `${detail.byteStart}–${detail.byteEnd} (${detail.byteEnd - detail.byteStart} B)`
+                      : null,
+                  mono: true,
+                },
+                {
+                  label: "Event hash (SHA-256)",
+                  value: <HashValue value={detail.eventHash} label="event hash" truncate={false} />,
+                  wide: true,
+                },
+              ]}
+            />
+          </section>
         </div>
-
-        {/* Modal Footer */}
-        <div className="px-5 py-3 border-t border-border bg-surface-subtle flex items-center justify-end gap-2 shrink-0">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onClose}
-          >
-            Close Inspector
-          </Button>
-        </div>
-      </div>
-    </div>
+      )}
+    </Drawer>
   );
 }
-

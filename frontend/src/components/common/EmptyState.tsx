@@ -1,35 +1,57 @@
 import React from "react";
 import { Inbox } from "lucide-react";
 import { Button } from "@/components/ui/Button";
+import { cn } from "@/lib/utils";
 
 interface EmptyStateProps {
   icon?: React.ReactNode;
   title: string;
-  description: string;
+  description: React.ReactNode;
   actionLabel?: string;
   onAction?: () => void;
+  /** Additional action node (e.g. a Link) */
+  action?: React.ReactNode;
+  /** Render without the dashed frame when already inside a panel */
+  bare?: boolean;
+  className?: string;
 }
 
 export function EmptyState({
-  icon = <Inbox className="w-10 h-10 text-text-disabled" />,
+  icon = <Inbox />,
   title,
   description,
   actionLabel,
   onAction,
+  action,
+  bare = false,
+  className,
 }: EmptyStateProps) {
   return (
-    <div className="flex flex-col items-center justify-center p-12 text-center border border-dashed border-border rounded-lg bg-surface-subtle/40">
-      <div className="p-3 bg-surface rounded-full shadow-sm border border-border mb-3">
+    <div
+      className={cn(
+        "flex flex-col items-center justify-center px-6 py-10 text-center",
+        !bare && "rounded-md border border-dashed border-border bg-surface/60",
+        className
+      )}
+    >
+      <div
+        className="mb-3 flex h-9 w-9 items-center justify-center rounded-md border border-border bg-surface-subtle text-text-muted [&_svg]:h-4 [&_svg]:w-4"
+        aria-hidden="true"
+      >
         {icon}
       </div>
-      <h4 className="text-sm font-semibold text-text-primary">{title}</h4>
-      <p className="text-xs text-text-muted mt-1 max-w-sm">{description}</p>
-      {actionLabel && onAction && (
-        <Button variant="secondary" size="sm" onClick={onAction} className="mt-4">
-          {actionLabel}
-        </Button>
+      <h3 className="text-sm font-semibold text-text-primary">{title}</h3>
+      <p className="mt-1 max-w-md text-xs leading-relaxed text-text-muted">{description}</p>
+      {(action || (actionLabel && onAction)) && (
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+          {actionLabel && onAction && (
+            <Button variant="secondary" size="sm" onClick={onAction}>
+              {actionLabel}
+            </Button>
+          )}
+          {action}
+        </div>
       )}
     </div>
   );
 }
-

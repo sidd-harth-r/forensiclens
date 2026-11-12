@@ -2,93 +2,111 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * ForensicLens design tokens.
+ * Values are RGB channels so Tailwind opacity modifiers work (rgb(var(--x) / a)).
+ * Dark graphite is the primary workspace; light mode is retained for print/daylight use.
+ */
 @layer base {
   :root {
+    color-scheme: light;
+
     /* Surfaces */
-    --background: #F8FAFC;
-    --surface: #FFFFFF;
-    --surface-subtle: #F1F5F9;
-    --surface-muted: #E2E8F0;
-    --surface-inverse: #0F172A;
+    --background: 245 247 249;
+    --surface: 255 255 255;
+    --surface-subtle: 241 243 246;
+    --surface-muted: 228 232 237;
+    --surface-raised: 255 255 255;
+    --surface-inverse: 17 20 24;
 
     /* Text */
-    --text-primary: #0F172A;
-    --text-secondary: #334155;
-    --text-muted: #64748B;
-    --text-disabled: #94A3B8;
-    --text-inverse: #F8FAFC;
+    --text-primary: 15 20 25;
+    --text-secondary: 51 61 73;
+    --text-muted: 91 102 117;
+    --text-disabled: 138 148 162;
+    --text-inverse: 245 247 249;
 
-    /* Borders (Light control borders >= 3:1 contrast) */
-    --border: #CBD5E1;
-    --border-subtle: #E2E8F0;
-    --border-strong: #94A3B8;
+    /* Borders */
+    --border: 213 219 226;
+    --border-subtle: 230 234 239;
+    --border-strong: 170 180 192;
 
-    /* Accent (Indigo only) */
-    --accent: #4F46E5;
-    --accent-hover: #4338CA;
-    --accent-active: #3730A3;
-    --accent-subtle: #EEF2FF;
-    --accent-text: #3730A3;
+    /* Accent — single restrained teal */
+    --accent: 15 118 110;
+    --accent-solid: 15 118 110;
+    --accent-hover: 13 101 94;
+    --accent-active: 11 86 80;
+    --accent-subtle: 230 244 242;
+    --accent-text: 11 93 87;
+    --accent-on: 255 255 255;
 
-    /* Semantic Status (Light) */
-    --status-success: #15803D;
-    --status-success-bg: #F0FDF4;
+    /* Status */
+    --status-success: 21 128 61;
+    --status-success-bg: 236 248 240;
+    --status-warning: 161 98 7;
+    --status-warning-bg: 253 247 230;
+    --status-danger: 180 35 24;
+    --status-danger-bg: 253 238 236;
+    --status-neutral: 71 84 103;
+    --status-neutral-bg: 240 242 245;
+    --status-human: 105 65 198;
+    --status-human-bg: 243 240 253;
+    --status-info: 29 111 184;
+    --status-info-bg: 234 243 251;
 
-    --status-warning: #A16207;
-    --status-warning-bg: #FEFCE8;
-
-    --status-danger: #B91C1C;
-    --status-danger-bg: #FEF2F2;
-
-    --status-neutral: #475569;
-    --status-neutral-bg: #F1F5F9;
-
-    --status-human: #7C3AED;
-    --status-human-bg: #F5F3FF;
+    /* Verbatim evidence blocks */
+    --code-bg: 241 243 246;
+    --code-text: 23 30 38;
   }
 
   .dark {
-    /* Surfaces (Dark mode slate, not pure black) */
-    --background: #0B1120;
-    --surface: #111827;
-    --surface-subtle: #172033;
-    --surface-muted: #1E293B;
-    --surface-inverse: #F8FAFC;
+    color-scheme: dark;
 
-    /* Text */
-    --text-primary: #F8FAFC;
-    --text-secondary: #CBD5E1;
-    --text-muted: #94A3B8;
-    --text-disabled: #64748B;
-    --text-inverse: #0F172A;
+    /* Surfaces — graphite, not pure black */
+    --background: 11 13 16;
+    --surface: 17 20 24;
+    --surface-subtle: 22 26 31;
+    --surface-muted: 30 35 42;
+    --surface-raised: 24 28 34;
+    --surface-inverse: 230 234 240;
+
+    /* Text (muted >= 4.5:1 on surface) */
+    --text-primary: 230 234 240;
+    --text-secondary: 180 188 200;
+    --text-muted: 139 149 163;
+    --text-disabled: 96 105 118;
+    --text-inverse: 11 13 16;
 
     /* Borders */
-    --border: #334155;
-    --border-subtle: #1E293B;
-    --border-strong: #475569;
+    --border: 40 46 54;
+    --border-subtle: 30 35 41;
+    --border-strong: 60 68 79;
 
-    /* Accent (Indigo in Dark) */
-    --accent: #818CF8;
-    --accent-hover: #A5B4FC;
-    --accent-active: #6366F1;
-    --accent-subtle: #1E1B4B;
-    --accent-text: #C7D2FE;
+    /* Accent */
+    --accent: 52 196 178;
+    --accent-solid: 15 118 110;
+    --accent-hover: 17 133 124;
+    --accent-active: 13 101 94;
+    --accent-subtle: 14 40 39;
+    --accent-text: 110 222 207;
+    --accent-on: 255 255 255;
 
-    /* Semantic Status (Dark) */
-    --status-success: #4ADE80;
-    --status-success-bg: #052E16;
+    /* Status */
+    --status-success: 74 190 135;
+    --status-success-bg: 15 36 27;
+    --status-warning: 222 168 70;
+    --status-warning-bg: 42 33 17;
+    --status-danger: 236 112 104;
+    --status-danger-bg: 45 21 23;
+    --status-neutral: 160 170 184;
+    --status-neutral-bg: 30 35 42;
+    --status-human: 172 156 236;
+    --status-human-bg: 34 29 54;
+    --status-info: 98 172 232;
+    --status-info-bg: 16 35 58;
 
-    --status-warning: #FACC15;
-    --status-warning-bg: #422006;
-
-    --status-danger: #F87171;
-    --status-danger-bg: #450A0A;
-
-    --status-neutral: #CBD5E1;
-    --status-neutral-bg: #1E293B;
-
-    --status-human: #C4B5FD;
-    --status-human-bg: #2E1065;
+    --code-bg: 13 16 20;
+    --code-text: 214 222 232;
   }
 }
 
@@ -97,18 +115,52 @@
     @apply border-border;
   }
 
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
   body {
-    @apply bg-background text-text-primary;
-    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    @apply bg-background text-text-primary text-sm antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11", "tnum";
   }
 
   ::selection {
-    background-color: rgba(79, 70, 229, 0.2);
+    background-color: rgb(var(--accent) / 0.28);
   }
 
-  /* Accessible focus indicators */
+  /* Visible, consistent focus indicator for every interactive element */
   :focus-visible {
-    outline: 2px solid var(--accent);
+    outline: 2px solid rgb(var(--accent));
     outline-offset: 2px;
+  }
+
+  /* Subtle scrollbars that respect the theme */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--border-strong)) transparent;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@layer components {
+  /* Eyebrow / meta label used above values and in table headers */
+  .label-caps {
+    @apply text-2xs font-medium uppercase tracking-[0.06em] text-text-muted;
+  }
+
+  /* Verbatim evidence text: untrusted, rendered as-is */
+  .evidence-block {
+    @apply rounded border border-border-subtle bg-code-bg px-3 py-2 font-mono text-xs leading-relaxed text-code-text;
   }
 }

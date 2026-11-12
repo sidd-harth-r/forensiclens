@@ -1,89 +1,65 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef } from "react";
-import { Link } from "react-router-dom";
-import { useCase } from "@/context/CaseContext";
-import { PageHeader } from "@/components/layout/PageHeader";
-import { Card, CardContent } from "@/components/ui/Card";
-import { Button } from "@/components/ui/Button";
-import { Input } from "@/components/ui/Input";
-import { Badge, ParserStatusBadge } from "@/components/ui/Badge";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/Table";
-import { EmptyState } from "@/components/common/EmptyState";
-import { LoadingState } from "@/components/common/LoadingState";
-import { ErrorState } from "@/components/common/ErrorState";
-import { getEvidenceFiles, uploadEvidence, processEvidence } from "@/services/evidence";
-import { EvidenceFile, ProcessEvidenceResult } from "@/types/evidence";
-import { formatBytes, formatHash, formatDateTime } from "@/lib/formatters";
+import { useNavigate } from "react-router-dom";
 import {
   HardDrive,
-  Search,
   Upload,
-  FileCode,
   FileText,
-  Copy,
-  ShieldCheck,
-  X,
   Cpu,
-  Loader2,
   ArrowRight,
+  ShieldCheck,
+  Info,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useCase } from "@/context/CaseContext";
+import { PageHeader, CaseScope, FilterBar } from "@/components/layout/PageHeader";
+import { Card, Panel } from "@/components/ui/Card";
+import { Button } from "@/components/ui/Button";
+import { Select, Field, SearchField } from "@/components/ui/Input";
+import { Badge, ParserStatusBadge } from "@/components/ui/Badge";
+import { SegmentedControl } from "@/components/ui/Tabs";
+import { Dialog, Drawer } from "@/components/ui/Dialog";
+import { HashValue, IdValue, KeyValueList, StatTile } from "@/components/ui/DataDisplay";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/Table";
+import { TableSkeleton } from "@/components/ui/Skeleton";
+import { EmptyState } from "@/components/common/EmptyState";
+import { ErrorState } from "@/components/common/ErrorState";
+import { Notice } from "@/components/common/Notice";
+import { getEvidenceFiles, uploadEvidence, processEvidence } from "@/services/evidence";
+import { EvidenceFile, ProcessEvidenceResult } from "@/types/evidence";
+import { formatBytes, formatDateTime, describeError } from "@/lib/formatters";
+import { cn } from "@/lib/utils";
+
+const FORMAT_FILTERS = ["ALL", "OPENSSH", "SYSLOG", "APACHE", "GENERIC"] as const;
+type FormatFilter = (typeof FORMAT_FILTERS)[number];
+
+const PARSER_FORMATS = [
+  { value: "OPENSSH", label: "OpenSSH authentication log (auth.log)" },
+  { value: "SYSLOG", label: "Generic syslog" },
+  { value: "APACHE", label: "Apache web access log" },
+  { value: "GENERIC", label: "Generic text" },
+];
 
 export function EvidencePage() {
   const { currentCase, refreshCases } = useCase();
+  const navigate = useNavigate();
   const [evidenceList, setEvidenceList] = useState<EvidenceFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
-  const [formatFilter, setFormatFilter] = useState<string>("ALL");
+  const [formatFilter, setFormatFilter] = useState<FormatFilter>("ALL");
+  const [inspected, setInspected] = useState<EvidenceFile | null>(null);
 
   // Ingest modal
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [selectedFormat, setSelectedFormat] = useState<string>("OPENSSH");
   const [isUploading, setIsUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Processing state
   const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
   const [processingResults, setProcessingResults] = useState<Record<string, ProcessEvidenceResult>>({});
-
-  const handleProcess = async (ev: EvidenceFile) => {
-    if (!currentCase?.caseId) {
-      toast.error("No active case selected");
-      return;
-    }
-    const { evidenceId, format, originalName } = ev;
-
-    setProcessingIds((prev) => new Set(prev).add(evidenceId));
-    try {
-      const result = await processEvidence(currentCase.caseId, evidenceId, format);
-      setProcessingResults((prev) => ({
-        ...prev,
-        [evidenceId]: result,
-      }));
-      toast.success(
-        `Processed ${originalName}: generated ${result.eventsCount} events (${result.rawRecordsCount} raw records)`
-      );
-      await loadEvidence();
-      await refreshCases();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Evidence processing failed");
-      await loadEvidence();
-    } finally {
-      setProcessingIds((prev) => {
-        const next = new Set(prev);
-        next.delete(evidenceId);
-        return next;
-      });
-    }
-  };
 
   const loadEvidence = useCallback(async () => {
     if (!currentCase?.caseId) {
@@ -97,7 +73,7 @@ export function EvidencePage() {
       const res = await getEvidenceFiles(currentCase.caseId);
       setEvidenceList(res);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load evidence files");
+      setError(describeError(err, "Failed to load evidence files"));
     } finally {
       setLoading(false);
     }
@@ -107,20 +83,65 @@ export function EvidencePage() {
     loadEvidence();
   }, [loadEvidence]);
 
+  // Keep the inspector in sync with refreshed rows
+  useEffect(() => {
+    if (!inspected) return;
+    const fresh = evidenceList.find((e) => e.evidenceId === inspected.evidenceId);
+    if (fresh && fresh !== inspected) setInspected(fresh);
+  }, [evidenceList, inspected]);
+
+  const handleProcess = async (ev: EvidenceFile) => {
+    if (!currentCase?.caseId) {
+      toast.error("No active case selected");
+      return;
+    }
+    const { evidenceId, format, originalName } = ev;
+
+    setProcessingIds((prev) => new Set(prev).add(evidenceId));
+    try {
+      const result = await processEvidence(currentCase.caseId, evidenceId, format);
+      setProcessingResults((prev) => ({ ...prev, [evidenceId]: result }));
+      toast.success(
+        `Processed ${originalName}: ${result.eventsCount} events from ${result.rawRecordsCount} raw records`
+      );
+      await loadEvidence();
+      await refreshCases();
+    } catch (err) {
+      toast.error(describeError(err, "Evidence processing failed"));
+      await loadEvidence();
+    } finally {
+      setProcessingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(evidenceId);
+        return next;
+      });
+    }
+  };
+
   const filteredEvidence = useMemo(() => {
+    const q = searchTerm.toLowerCase();
     return evidenceList.filter((e) => {
       const matchesSearch =
-        e.evidenceId.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        e.originalName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        e.objectHash.toLowerCase().includes(searchTerm.toLowerCase());
+        e.evidenceId.toLowerCase().includes(q) ||
+        e.originalName.toLowerCase().includes(q) ||
+        e.objectHash.toLowerCase().includes(q);
       const matchesFormat = formatFilter === "ALL" || e.format === formatFilter;
       return matchesSearch && matchesFormat;
     });
   }, [evidenceList, searchTerm, formatFilter]);
 
-  const copyToClipboard = (text: string, label: string) => {
-    navigator.clipboard.writeText(text);
-    toast.success(`Copied ${label} to clipboard`);
+  const stats = useMemo(() => {
+    const parsed = evidenceList.filter((e) => e.parserStatus === "PARSED" || e.parserStatus === "PARTIAL").length;
+    const pending = evidenceList.filter((e) => e.parserStatus === "PENDING").length;
+    const failed = evidenceList.filter((e) => e.parserStatus === "FAILED" || e.parserStatus === "UNSUPPORTED").length;
+    const bytes = evidenceList.reduce((s, e) => s + (e.objectSizeBytes || 0), 0);
+    return { parsed, pending, failed, bytes };
+  }, [evidenceList]);
+
+  const closeUpload = () => {
+    if (isUploading) return;
+    setShowUploadModal(false);
+    setSelectedFile(null);
   };
 
   const handleUploadSubmit = async (e: React.FormEvent) => {
@@ -130,128 +151,154 @@ export function EvidencePage() {
       return;
     }
     if (!selectedFile) {
-      toast.error("Please choose a file to ingest");
+      toast.error("Choose a file to ingest");
       return;
     }
 
     setIsUploading(true);
     try {
-      const res = await uploadEvidence(
-        currentCase.caseId,
-        selectedFile,
-        selectedFormat
-      );
-      toast.success(
-        `Ingested ${res.originalName} (SHA-256: ${formatHash(res.objectHash)})`
-      );
+      const res = await uploadEvidence(currentCase.caseId, selectedFile, selectedFormat);
+      toast.success(`Ingested ${res.originalName}`, {
+        description: `SHA-256 ${res.objectHash}`,
+      });
       setShowUploadModal(false);
       setSelectedFile(null);
       await loadEvidence();
       await refreshCases();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Evidence ingestion failed");
+      toast.error(describeError(err, "Evidence ingestion failed"));
     } finally {
       setIsUploading(false);
     }
   };
 
-  if (loading) {
-    return <LoadingState message="Loading immutable evidence records..." />;
-  }
+  const filtersActive = searchTerm !== "" || formatFilter !== "ALL";
 
-  if (error) {
+  // Parsed lines / total lines as stored on the evidence record (backend parsed_lines /
+  // total_lines). Event counts differ from parsed lines and are shown only in the
+  // inspector's processing-run summary, never mixed into this column.
+  const renderCounts = (ev: EvidenceFile) => {
+    if (ev.parsedLines != null && ev.parsedLines > 0) {
+      return (
+        <>
+          <span className="text-text-primary">{ev.parsedLines.toLocaleString()}</span>
+          {ev.totalLines ? <span className="text-text-muted"> / {ev.totalLines.toLocaleString()}</span> : null}
+        </>
+      );
+    }
+    if (ev.totalLines) return <span className="text-text-muted">— / {ev.totalLines.toLocaleString()}</span>;
+    return <span className="text-text-disabled">—</span>;
+  };
+
+  const renderAction = (ev: EvidenceFile) => {
+    const isProcessing = processingIds.has(ev.evidenceId);
+    const status = isProcessing ? "PROCESSING" : ev.parserStatus;
+    if (isProcessing) {
+      return (
+        <Button size="xs" variant="outline" loading>
+          Processing
+        </Button>
+      );
+    }
+    if (status === "PARSED" || status === "PARTIAL") {
+      return (
+        <Button
+          variant="ghost"
+          size="xs"
+          onClick={(e) => {
+            e.stopPropagation();
+            navigate("/events");
+          }}
+          aria-label={`View events parsed from ${ev.originalName}`}
+        >
+          Events
+          <ArrowRight className="h-3 w-3" aria-hidden="true" />
+        </Button>
+      );
+    }
     return (
-      <div className="space-y-4">
-        <PageHeader
-          title="Evidence Explorer"
-          description="Content-addressed, immutable forensic artifacts."
-        />
-        <ErrorState
-          title="Failed to Load Evidence"
-          message={error}
-          onRetry={loadEvidence}
-        />
-      </div>
+      <Button
+        size="xs"
+        variant="primary"
+        onClick={(e) => {
+          e.stopPropagation();
+          void handleProcess(ev);
+        }}
+        aria-label={`Parse ${ev.originalName} into events`}
+      >
+        <Cpu className="h-3 w-3" aria-hidden="true" />
+        Process
+      </Button>
     );
-  }
+  };
 
   return (
-    <div className="space-y-5">
+    <>
       <PageHeader
-        title="Evidence Explorer"
-        description="Content-addressed, immutable forensic artifacts. Once ingested and hashed with SHA-256, files are stored read-only and indexed for provenance tracking."
+        title="Evidence"
+        eyebrow={<CaseScope caseId={currentCase?.caseId} name={currentCase?.name} />}
+        description="Artifacts are hashed with SHA-256 on ingestion, copied into the case evidence store and parsed into normalized events. The application never modifies a stored artifact."
         actions={
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => toast.info("Batch SHA-256 verification confirmed 100% byte integrity")}
-            >
-              <ShieldCheck className="w-3.5 h-3.5 mr-1 text-status-success" />
-              Re-verify Hashes
-            </Button>
-            <Button
-              variant="default"
-              size="sm"
-              onClick={() => setShowUploadModal(true)}
-              disabled={!currentCase}
-            >
-              <Upload className="w-3.5 h-3.5 mr-1" /> Ingest Artifact
-            </Button>
-          </div>
+          <Button variant="primary" size="sm" onClick={() => setShowUploadModal(true)} disabled={!currentCase}>
+            <Upload className="h-3.5 w-3.5" aria-hidden="true" />
+            Ingest evidence
+          </Button>
         }
       />
 
-      {/* Filter and stats banner */}
-      <Card>
-        <CardContent className="p-3">
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-            <div className="w-full sm:w-80">
-              <Input
-                placeholder="Search by Evidence ID, filename, or SHA-256..."
+      {!currentCase && !loading ? (
+        <EmptyState
+          icon={<HardDrive />}
+          title="No case selected"
+          description="Select a case from the case selector to view and ingest its evidence."
+        />
+      ) : error ? (
+        <ErrorState title="Failed to load evidence" message={error} onRetry={loadEvidence} />
+      ) : (
+        <>
+          <section aria-label="Evidence summary" className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <StatTile label="Artifacts" value={loading ? "…" : evidenceList.length} hint={loading ? undefined : formatBytes(stats.bytes)} icon={<HardDrive />} />
+            <StatTile label="Parsed" value={loading ? "…" : stats.parsed} hint="Parsed or partial" tone="success" />
+            <StatTile label="Awaiting processing" value={loading ? "…" : stats.pending} tone={stats.pending > 0 ? "warning" : "default"} />
+            <StatTile label="Failed / unsupported" value={loading ? "…" : stats.failed} tone={stats.failed > 0 ? "danger" : "default"} />
+          </section>
+
+          <Card className="overflow-hidden">
+            <FilterBar>
+              <SearchField
+                label="Search evidence"
+                placeholder="Search by evidence ID, filename or SHA-256"
                 value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                icon={<Search className="w-3.5 h-3.5 text-text-muted" />}
+                onValueChange={setSearchTerm}
+                className="sm:w-80"
               />
-            </div>
+              <SegmentedControl<FormatFilter>
+                label="Filter by format"
+                value={formatFilter}
+                onChange={setFormatFilter}
+                mono
+                options={FORMAT_FILTERS.map((f) => ({ value: f, label: f === "ALL" ? "All formats" : f }))}
+              />
+              <span className="ml-auto text-xs text-text-muted" aria-live="polite">
+                {filteredEvidence.length} of {evidenceList.length}
+              </span>
+            </FilterBar>
 
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <span className="text-xs text-text-muted mr-1">Format:</span>
-              {(["ALL", "OPENSSH", "SYSLOG", "APACHE", "GENERIC"] as const).map((fmt) => (
-                <button
-                  key={fmt}
-                  type="button"
-                  onClick={() => setFormatFilter(fmt)}
-                  className={`text-xs px-2.5 py-1 rounded transition-colors font-medium ${
-                    formatFilter === fmt
-                      ? "bg-accent text-white"
-                      : "bg-surface-subtle text-text-secondary hover:bg-surface-muted"
-                  }`}
-                >
-                  {fmt}
-                </button>
-              ))}
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Evidence Table */}
-      <Card>
-        <CardContent className="p-0">
-          {filteredEvidence.length === 0 ? (
-            <div className="p-8">
+            {loading ? (
+              <TableSkeleton rows={6} columns={8} label="Loading evidence" />
+            ) : filteredEvidence.length === 0 ? (
               <EmptyState
-                icon={<HardDrive className="w-8 h-8 text-text-disabled" />}
-                title="No evidence artifacts found"
+                bare
+                icon={<HardDrive />}
+                title={filtersActive ? "No evidence matches these filters" : "No evidence ingested"}
                 description={
-                  searchTerm
-                    ? `No files match query "${searchTerm}".`
-                    : `No evidence artifacts have been ingested into case ${currentCase?.caseId || ""}.`
+                  filtersActive
+                    ? "Adjust the search text or format filter."
+                    : `Ingest a log or artifact into ${currentCase?.caseId ?? "this case"} to hash it and parse it into events.`
                 }
-                actionLabel={searchTerm ? "Reset Search" : "+ Ingest File"}
+                actionLabel={filtersActive ? "Clear filters" : "Ingest evidence"}
                 onAction={() => {
-                  if (searchTerm) {
+                  if (filtersActive) {
                     setSearchTerm("");
                     setFormatFilter("ALL");
                   } else {
@@ -259,259 +306,274 @@ export function EvidencePage() {
                   }
                 }}
               />
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-36">Evidence ID</TableHead>
-                  <TableHead>Source Filename</TableHead>
-                  <TableHead className="w-24">Format</TableHead>
-                  <TableHead className="w-36">SHA-256 Digest</TableHead>
-                  <TableHead className="w-20 text-right">Size</TableHead>
-                  <TableHead className="w-32 text-right">Events / Lines</TableHead>
-                  <TableHead className="w-28 text-center">Status</TableHead>
-                  <TableHead className="w-36">Ingested UTC</TableHead>
-                  <TableHead className="w-36 text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredEvidence.map((ev) => {
-                  const isProcessing = processingIds.has(ev.evidenceId);
-                  const currentStatus = isProcessing ? "PROCESSING" : ev.parserStatus;
-                  const result = processingResults[ev.evidenceId];
-
-                  return (
-                    <TableRow key={ev.evidenceId}>
-                      <TableCell className="font-mono text-xs font-semibold text-text-primary">
-                        <span className="flex items-center gap-1">
-                          {ev.evidenceId}
-                          <button
-                            type="button"
-                            onClick={() => copyToClipboard(ev.evidenceId, "Evidence ID")}
-                            className="text-text-muted hover:text-text-primary p-0.5"
-                            title="Copy Evidence ID"
-                          >
-                            <Copy className="w-3 h-3" />
-                          </button>
-                        </span>
-                      </TableCell>
-
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          {ev.format === "OPENSSH" || ev.format === "SYSLOG" ? (
-                            <FileText className="w-3.5 h-3.5 text-accent shrink-0" />
-                          ) : (
-                            <FileCode className="w-3.5 h-3.5 text-purple-500 shrink-0" />
-                          )}
-                          <span className="font-mono text-xs font-medium text-text-primary">
-                            {ev.originalName}
-                          </span>
-                        </div>
-                      </TableCell>
-
-                      <TableCell>
-                        <Badge variant="default" className="font-mono">
-                          {ev.format}
-                        </Badge>
-                      </TableCell>
-
-                      <TableCell className="font-mono text-[11px] text-text-muted">
-                        <div className="flex items-center gap-1">
-                          <span title={ev.objectHash}>{formatHash(ev.objectHash)}</span>
-                          <button
-                            type="button"
-                            onClick={() => copyToClipboard(ev.objectHash, "SHA-256")}
-                            className="text-text-muted hover:text-text-primary p-0.5"
-                            title="Copy full SHA-256 hash"
-                          >
-                            <Copy className="w-3 h-3" />
-                          </button>
-                        </div>
-                      </TableCell>
-
-                      <TableCell className="text-right font-mono text-xs text-text-secondary">
-                        {formatBytes(ev.objectSizeBytes)}
-                      </TableCell>
-
-                      <TableCell className="text-right font-mono text-xs">
-                        {result ? (
-                          <div>
-                            <span className="text-status-success font-semibold">
-                              {result.eventsCount.toLocaleString()} events
-                            </span>
-                            <span className="text-[11px] text-text-muted block">
-                              ({result.rawRecordsCount.toLocaleString()} lines)
-                            </span>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Artifact</TableHead>
+                    <TableHead className="w-[100px]">Format</TableHead>
+                    <TableHead className="w-[210px]">SHA-256</TableHead>
+                    <TableHead className="w-[80px] text-right">Size</TableHead>
+                    <TableHead className="w-[130px] text-right" title="Lines parsed / total lines in the artifact">
+                      Parsed / lines
+                    </TableHead>
+                    <TableHead className="w-[120px]">Status</TableHead>
+                    <TableHead className="w-[170px]">Ingested (UTC)</TableHead>
+                    <TableHead className="w-[110px] text-right">
+                      <span className="sr-only">Actions</span>
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredEvidence.map((ev) => {
+                    const status = processingIds.has(ev.evidenceId) ? "PROCESSING" : ev.parserStatus;
+                    return (
+                      <TableRow
+                        key={ev.evidenceId}
+                        selected={inspected?.evidenceId === ev.evidenceId}
+                        onActivate={() => setInspected(ev)}
+                        aria-label={`Inspect ${ev.originalName}`}
+                      >
+                        <TableCell className="max-w-[280px]">
+                          <div className="flex items-center gap-2">
+                            <FileText className="h-3.5 w-3.5 shrink-0 text-text-muted" aria-hidden="true" />
+                            <div className="min-w-0">
+                              <div className="truncate font-mono text-xs text-text-primary" title={ev.originalName}>
+                                {ev.originalName}
+                              </div>
+                              <div className="font-mono text-2xs text-text-muted">{ev.evidenceId}</div>
+                            </div>
                           </div>
-                        ) : ev.parsedLines !== undefined && ev.parsedLines !== null && ev.parsedLines > 0 ? (
-                          <div>
-                            <span className="text-text-primary font-medium">
-                              {ev.parsedLines.toLocaleString()} events
-                            </span>
-                            {ev.totalLines ? (
-                              <span className="text-[11px] text-text-muted block">
-                                ({ev.totalLines.toLocaleString()} lines)
-                              </span>
-                            ) : null}
-                          </div>
-                        ) : ev.totalLines ? (
-                          <span className="text-text-secondary">
-                            {ev.totalLines.toLocaleString()} lines
-                          </span>
-                        ) : (
-                          <span className="text-text-muted">—</span>
-                        )}
-                      </TableCell>
-
-                      <TableCell className="text-center">
-                        <ParserStatusBadge status={currentStatus} />
-                      </TableCell>
-
-                      <TableCell className="text-xs text-text-muted font-mono">
-                        {formatDateTime(ev.createdAt)}
-                      </TableCell>
-
-                      <TableCell className="text-right">
-                        {isProcessing ? (
-                          <Button size="sm" variant="outline" disabled className="text-xs h-7 gap-1">
-                            <Loader2 className="w-3 h-3 animate-spin text-accent" />
-                            <span>Processing...</span>
-                          </Button>
-                        ) : currentStatus === "PARSED" || currentStatus === "PARTIAL" ? (
-                          <Link to="/events">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="text-xs h-7 text-accent hover:text-accent-hover gap-1 font-medium"
-                            >
-                              <span>View Events</span>
-                              <ArrowRight className="w-3 h-3" />
-                            </Button>
-                          </Link>
-                        ) : (
-                          <Button
-                            size="sm"
-                            variant="default"
-                            className="text-xs h-7 gap-1 font-medium"
-                            onClick={() => handleProcess(ev)}
-                          >
-                            <Cpu className="w-3 h-3" />
-                            <span>Process</span>
-                          </Button>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Upload Modal */}
-      {showUploadModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
-          <div className="bg-surface border border-border rounded-lg max-w-md w-full p-5 space-y-4 shadow-xl">
-            <div className="flex items-center justify-between border-b border-border pb-3">
-              <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2">
-                <Upload className="w-4 h-4 text-accent" />
-                Ingest Forensic Artifact
-              </h3>
-              <button
-                type="button"
-                onClick={() => setShowUploadModal(false)}
-                className="text-text-muted hover:text-text-primary"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <form onSubmit={handleUploadSubmit} className="space-y-4">
-              <div className="text-xs text-text-muted">
-                Active Case: <span className="font-mono font-semibold text-text-primary">{currentCase?.caseId}</span> ({currentCase?.name})
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-text-secondary mb-1">
-                  Evidence File *
-                </label>
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  className="hidden"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) setSelectedFile(f);
-                  }}
-                />
-                <div
-                  onClick={() => fileInputRef.current?.click()}
-                  className="border border-dashed border-border-strong rounded-lg p-4 text-center cursor-pointer hover:bg-surface-subtle transition-colors"
-                >
-                  {selectedFile ? (
-                    <div className="space-y-1">
-                      <div className="font-mono text-xs font-semibold text-accent truncate">
-                        {selectedFile.name}
-                      </div>
-                      <div className="text-[11px] text-text-muted">
-                        {formatBytes(selectedFile.size)}
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="space-y-1">
-                      <Upload className="w-6 h-6 text-text-muted mx-auto" />
-                      <div className="text-xs font-medium text-text-primary">
-                        Click to select log or artifact file
-                      </div>
-                      <div className="text-[11px] text-text-muted">
-                        .log, .txt, .json, .evtx
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-text-secondary mb-1">
-                  Parser Format
-                </label>
-                <select
-                  className="w-full text-xs rounded border border-border bg-surface-subtle p-2 text-text-primary focus:outline-none focus:ring-1 focus:ring-accent"
-                  value={selectedFormat}
-                  onChange={(e) => setSelectedFormat(e.target.value)}
-                >
-                  <option value="OPENSSH">Linux OpenSSH Authentication (auth.log)</option>
-                  <option value="SYSLOG">Generic Syslog</option>
-                  <option value="APACHE">Apache Web Access Log</option>
-                  <option value="GENERIC">Generic Text</option>
-                </select>
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setShowUploadModal(false)}
-                  disabled={isUploading}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="submit"
-                  variant="default"
-                  size="sm"
-                  disabled={isUploading || !selectedFile}
-                >
-                  {isUploading ? "Hashing & Ingesting..." : "Ingest & Verify"}
-                </Button>
-              </div>
-            </form>
-          </div>
-        </div>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline" mono>
+                            {ev.format}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <HashValue value={ev.objectHash} label="SHA-256" />
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap text-right font-mono text-xs text-text-secondary">
+                          {formatBytes(ev.objectSizeBytes)}
+                        </TableCell>
+                        <TableCell className="text-right font-mono text-xs">{renderCounts(ev)}</TableCell>
+                        <TableCell>
+                          <ParserStatusBadge status={status} />
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap font-mono text-2xs text-text-muted">
+                          {formatDateTime(ev.createdAt)}
+                        </TableCell>
+                        <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                          {renderAction(ev)}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            )}
+          </Card>
+        </>
       )}
-    </div>
+
+      {/* Evidence detail inspector */}
+      <Drawer
+        open={!!inspected}
+        onClose={() => setInspected(null)}
+        width="md"
+        eyebrow={
+          inspected && (
+            <>
+              <Badge variant="outline" mono>
+                {inspected.format}
+              </Badge>
+              <ParserStatusBadge status={processingIds.has(inspected.evidenceId) ? "PROCESSING" : inspected.parserStatus} />
+            </>
+          )
+        }
+        title={<span className="font-mono text-sm">{inspected?.originalName}</span>}
+        footer={
+          inspected && (
+            <>
+              <span className="text-2xs text-text-muted">Not modified by the application</span>
+              {renderAction(inspected)}
+            </>
+          )
+        }
+      >
+        {inspected && (
+          <div className="space-y-5">
+            <section aria-labelledby="ev-integrity">
+              <h3 id="ev-integrity" className="label-caps mb-2 flex items-center gap-1.5">
+                <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
+                Integrity
+              </h3>
+              <div className="rounded border border-border bg-surface-subtle p-3">
+                <div className="label-caps mb-1">SHA-256 digest</div>
+                <HashValue value={inspected.objectHash} label="SHA-256" truncate={false} className="text-text-primary" />
+              </div>
+              <KeyValueList
+                className="mt-2"
+                items={[
+                  {
+                    label: "Hash last verified (backend)",
+                    value: inspected.hashVerifiedAt ? (
+                      <span title="Recorded by the backend when the stored copy was re-hashed and matched (at ingestion). No re-verification can be triggered from the UI, so this is not a live integrity check.">
+                        {formatDateTime(inspected.hashVerifiedAt)}
+                        <span className="block font-sans text-2xs text-text-muted">
+                          Set at ingestion · not a live check
+                        </span>
+                      </span>
+                    ) : (
+                      <span className="text-text-muted">Not recorded</span>
+                    ),
+                    mono: true,
+                  },
+                  { label: "Size", value: `${formatBytes(inspected.objectSizeBytes)} (${inspected.objectSizeBytes.toLocaleString()} bytes)`, mono: true },
+                ]}
+              />
+            </section>
+
+            <section aria-labelledby="ev-provenance">
+              <h3 id="ev-provenance" className="label-caps mb-2">
+                Provenance
+              </h3>
+              <KeyValueList
+                items={[
+                  { label: "Evidence ID", value: <IdValue value={inspected.evidenceId} label="evidence ID" /> },
+                  { label: "Case", value: inspected.caseId, mono: true },
+                  { label: "Original filename", value: inspected.originalName, mono: true },
+                  { label: "Media type", value: inspected.mediaType, mono: true },
+                  { label: "Storage path", value: inspected.storagePath, mono: true },
+                  { label: "Ingested (UTC)", value: formatDateTime(inspected.createdAt), mono: true },
+                ]}
+              />
+            </section>
+
+            <section aria-labelledby="ev-parse">
+              <h3 id="ev-parse" className="label-caps mb-2">
+                Parsing
+              </h3>
+              <KeyValueList
+                items={[
+                  { label: "Parser format", value: inspected.format, mono: true },
+                  { label: "Total lines", value: inspected.totalLines?.toLocaleString(), mono: true },
+                  { label: "Parsed lines", value: inspected.parsedLines?.toLocaleString(), mono: true },
+                ]}
+              />
+              {processingResults[inspected.evidenceId] && (
+                <Panel title="Last processing run (this session)" className="mt-3" headingLevel="h3">
+                  <KeyValueList
+                    items={[
+                      { label: "Parser", value: `${processingResults[inspected.evidenceId].parserName} ${processingResults[inspected.evidenceId].parserVersion ?? ""}`, mono: true },
+                      { label: "Raw records", value: processingResults[inspected.evidenceId].rawRecordsCount.toLocaleString(), mono: true },
+                      { label: "Events", value: processingResults[inspected.evidenceId].eventsCount.toLocaleString(), mono: true },
+                      { label: "Unparsed records", value: processingResults[inspected.evidenceId].unparsedRecordsCount.toLocaleString(), mono: true },
+                      { label: "Errors", value: processingResults[inspected.evidenceId].errorSummary },
+                    ]}
+                  />
+                </Panel>
+              )}
+            </section>
+          </div>
+        )}
+      </Drawer>
+
+      {/* Ingest dialog */}
+      <Dialog
+        open={showUploadModal}
+        onClose={closeUpload}
+        title="Ingest evidence"
+        description={
+          currentCase ? (
+            <>
+              Into <span className="font-mono text-text-secondary">{currentCase.caseId}</span> · {currentCase.name}
+            </>
+          ) : undefined
+        }
+        dismissible={!isUploading}
+        footer={
+          <>
+            <Button variant="ghost" size="sm" onClick={closeUpload} disabled={isUploading}>
+              Cancel
+            </Button>
+            <Button type="submit" form="ingest-form" variant="primary" size="sm" loading={isUploading} disabled={!selectedFile}>
+              {isUploading ? "Hashing & ingesting…" : "Ingest"}
+            </Button>
+          </>
+        }
+      >
+        <form id="ingest-form" onSubmit={handleUploadSubmit} className="space-y-4">
+          <div className="space-y-1">
+            <span className="block text-xs font-medium text-text-secondary">
+              Evidence file<span className="ml-0.5 text-status-danger" aria-hidden="true">*</span>
+            </span>
+            <input
+              id="evidence-file-input"
+              type="file"
+              ref={fileInputRef}
+              className="sr-only"
+              tabIndex={-1}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) setSelectedFile(f);
+              }}
+            />
+            <button
+              type="button"
+              data-autofocus
+              onClick={() => fileInputRef.current?.click()}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragOver(true);
+              }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragOver(false);
+                const f = e.dataTransfer.files?.[0];
+                if (f) setSelectedFile(f);
+              }}
+              className={cn(
+                "flex w-full flex-col items-center justify-center gap-1 rounded border border-dashed px-4 py-6 text-center transition-colors",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                dragOver ? "border-accent bg-accent-subtle" : "border-border-strong bg-surface-subtle hover:border-accent/60"
+              )}
+              aria-describedby="evidence-file-hint"
+            >
+              {selectedFile ? (
+                <>
+                  <FileText className="h-5 w-5 text-accent" aria-hidden="true" />
+                  <span className="max-w-full truncate font-mono text-xs font-medium text-text-primary">{selectedFile.name}</span>
+                  <span className="text-2xs text-text-muted">{formatBytes(selectedFile.size)} · click to change</span>
+                </>
+              ) : (
+                <>
+                  <Upload className="h-5 w-5 text-text-muted" aria-hidden="true" />
+                  <span className="text-xs font-medium text-text-primary">Choose a file or drop it here</span>
+                  <span className="text-2xs text-text-muted">.log, .txt, .json, .evtx</span>
+                </>
+              )}
+            </button>
+            <p id="evidence-file-hint" className="flex items-center gap-1 text-2xs text-text-muted">
+              <Info className="h-3 w-3" aria-hidden="true" />
+              The file is hashed with SHA-256 and a copy is stored in the case. Your original file is not modified.
+            </p>
+          </div>
+
+          <Field label="Parser format" htmlFor="parser-format">
+            <Select id="parser-format" value={selectedFormat} onChange={(e) => setSelectedFormat(e.target.value)}>
+              {PARSER_FORMATS.map((f) => (
+                <option key={f.value} value={f.value}>
+                  {f.label}
+                </option>
+              ))}
+            </Select>
+          </Field>
+
+          <Notice tone="info">Ingestion stores and hashes the artifact. Run “Process” afterwards to parse it into events.</Notice>
+        </form>
+      </Dialog>
+    </>
   );
 }

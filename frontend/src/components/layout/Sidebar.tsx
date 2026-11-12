@@ -1,183 +1,147 @@
-import React from "react";
 import { NavLink } from "react-router-dom";
+import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import {
-  LayoutDashboard,
-  FolderKanban,
-  HardDrive,
-  ListOrdered,
-  Clock,
-  Layers,
-  Sparkles,
-  ShieldCheck,
-  Search,
-  CheckCircle2,
-  Scale,
-  History,
-  Settings,
-  X,
-} from "lucide-react";
 import { useCase } from "@/context/CaseContext";
 import { Button } from "@/components/ui/Button";
-
-interface NavItem {
-  label: string;
-  to: string;
-  icon: React.ComponentType<{ className?: string }>;
-  badgeCount?: (c: ReturnType<typeof useCase>["currentCase"]) => number | undefined;
-}
-
-const NAV_ITEMS: NavItem[] = [
-  { label: "Dashboard", to: "/dashboard", icon: LayoutDashboard },
-  { label: "Cases", to: "/cases", icon: FolderKanban, badgeCount: () => undefined },
-  {
-    label: "Evidence",
-    to: "/evidence",
-    icon: HardDrive,
-    badgeCount: (c) => c?.evidenceCount,
-  },
-  {
-    label: "Events",
-    to: "/events",
-    icon: ListOrdered,
-    badgeCount: (c) => c?.eventsCount,
-  },
-  { label: "Timeline", to: "/timeline", icon: Clock },
-  { label: "Sessions", to: "/sessions", icon: Layers },
-  { label: "Retrieval", to: "/retrieval", icon: Sparkles },
-  { label: "Claims", to: "/claims", icon: ShieldCheck },
-  {
-    label: "Investigation",
-    to: "/investigation",
-    icon: Search,
-    badgeCount: (c) => c?.investigationsCount,
-  },
-  {
-    label: "Findings",
-    to: "/findings",
-    icon: CheckCircle2,
-    badgeCount: (c) => c?.findingsCount,
-  },
-  { label: "Legal", to: "/legal", icon: Scale },
-  { label: "Audit", to: "/audit", icon: History },
-  { label: "Settings", to: "/settings", icon: Settings },
-];
+import { NAV_GROUPS, SETTINGS_NAV, type NavItem } from "./navigation";
+import { BrandMark } from "./BrandMark";
 
 interface SidebarProps {
   isOpen?: boolean;
   onClose?: () => void;
 }
 
-export function Sidebar({ isOpen, onClose }: SidebarProps) {
+function formatCount(n: number): string {
+  return n > 999 ? `${(n / 1000).toFixed(n > 9999 ? 0 : 1)}k` : String(n);
+}
+
+function NavEntry({ item, onNavigate }: { item: NavItem; onNavigate?: () => void }) {
   const { currentCase } = useCase();
+  const Icon = item.icon;
+  const count = item.count?.(currentCase);
+
+  if (item.availability === "planned" || !item.to) {
+    return (
+      <li>
+        <span
+          className="flex h-8 cursor-not-allowed items-center justify-between gap-2 rounded px-2.5 text-sm text-text-disabled"
+          aria-disabled="true"
+          title={item.description}
+        >
+          <span className="flex min-w-0 items-center gap-2.5">
+            <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <span className="truncate">{item.label}</span>
+          </span>
+          <span className="rounded-sm border border-border px-1 text-[10px] font-medium uppercase tracking-wide">
+            Planned
+          </span>
+        </span>
+      </li>
+    );
+  }
 
   return (
+    <li>
+      <NavLink
+        to={item.to}
+        onClick={onNavigate}
+        title={item.description}
+        className={({ isActive }) =>
+          cn(
+            "group relative flex h-8 items-center justify-between gap-2 rounded px-2.5 text-sm transition-colors duration-100",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent",
+            isActive
+              ? "bg-surface-muted font-medium text-text-primary"
+              : "text-text-secondary hover:bg-surface-subtle hover:text-text-primary"
+          )
+        }
+      >
+        {({ isActive }) => (
+          <>
+            {isActive && (
+              <span className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-accent" aria-hidden="true" />
+            )}
+            <span className="flex min-w-0 items-center gap-2.5">
+              <Icon
+                className={cn(
+                  "h-4 w-4 shrink-0",
+                  isActive ? "text-accent" : "text-text-muted group-hover:text-text-secondary"
+                )}
+                aria-hidden="true"
+              />
+              <span className="truncate">{item.label}</span>
+            </span>
+            {item.availability === "preview" ? (
+              <span className="rounded-sm border border-status-warning/30 px-1 text-[10px] font-medium uppercase tracking-wide text-status-warning">
+                Preview
+              </span>
+            ) : typeof count === "number" ? (
+              <span className="font-mono text-2xs text-text-muted">{formatCount(count)}</span>
+            ) : null}
+          </>
+        )}
+      </NavLink>
+    </li>
+  );
+}
+
+export function Sidebar({ isOpen, onClose }: SidebarProps) {
+  return (
     <>
-      {/* Mobile backdrop */}
       {isOpen && (
-        <div
-          className="fixed inset-0 bg-black/40 z-30 md:hidden backdrop-blur-xs"
-          onClick={onClose}
-          aria-hidden="true"
-        />
+        <div className="fixed inset-0 z-[39] bg-black/50 md:hidden" onClick={onClose} aria-hidden="true" />
       )}
 
       <aside
+        id="app-sidebar"
         className={cn(
-          "w-56 border-r border-border bg-surface flex flex-col justify-between shrink-0 transition-transform duration-200 ease-in-out z-40 select-none",
-          "fixed md:static inset-y-0 left-0",
-          isOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
+          "z-sidebar flex w-sidebar shrink-0 select-none flex-col border-r border-border bg-surface",
+          "fixed inset-y-0 left-0 transition-transform duration-200 md:static md:translate-x-0",
+          isOpen ? "translate-x-0" : "-translate-x-full"
         )}
-        aria-label="Main Navigation"
+        aria-label="Primary"
       >
-        <div className="flex flex-col flex-1 min-h-0">
-          {/* Mobile close bar */}
-          <div className="h-12 border-b border-border flex items-center justify-between px-3 md:hidden">
-            <span className="font-semibold text-xs tracking-tight text-text-primary">
-              Navigation Menu
+        {/* Brand */}
+        <div className="flex h-topbar shrink-0 items-center justify-between border-b border-border px-3.5">
+          <NavLink
+            to="/dashboard"
+            onClick={onClose}
+            className="flex items-center gap-2.5 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            <BrandMark />
+            <span className="leading-tight">
+              <span className="block text-sm font-semibold tracking-tight text-text-primary">ForensicLens</span>
+              <span className="block text-[10px] uppercase tracking-[0.08em] text-text-muted">
+                Investigation workspace
+              </span>
             </span>
-            <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close menu">
-              <X className="w-4 h-4 text-text-muted" />
-            </Button>
-          </div>
-
-          {/* Active Case Context banner */}
-          <div className="px-3 pt-3 pb-2 border-b border-border-subtle">
-            <div className="text-[10px] font-semibold uppercase tracking-wider text-text-muted mb-1 flex items-center justify-between">
-              <span>Active Scope</span>
-              <span className="w-1.5 h-1.5 rounded-full bg-status-success inline-block" />
-            </div>
-            <div className="bg-surface-subtle border border-border rounded p-2">
-              <div className="font-mono font-bold text-xs text-text-primary truncate">
-                {currentCase?.caseId || "NO CASE"}
-              </div>
-              <div className="text-[11px] text-text-muted truncate mt-0.5">
-                {currentCase?.name || "Select case"}
-              </div>
-            </div>
-          </div>
-
-          {/* Navigation Links */}
-          <nav className="flex-1 px-2 py-2.5 space-y-0.5 overflow-y-auto">
-            {NAV_ITEMS.map((item) => {
-              const Icon = item.icon;
-              const count = item.badgeCount?.(currentCase);
-
-              return (
-                <NavLink
-                  key={item.to}
-                  to={item.to}
-                  onClick={onClose}
-                  className={({ isActive }) =>
-                    cn(
-                      "flex items-center justify-between px-2.5 py-1.5 rounded text-xs font-medium transition-colors group",
-                      isActive
-                        ? "bg-accent text-white font-semibold shadow-xs"
-                        : "text-text-secondary hover:text-text-primary hover:bg-surface-subtle"
-                    )
-                  }
-                >
-                  {({ isActive }) => (
-                    <>
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <Icon
-                          className={cn(
-                            "w-4 h-4 shrink-0 transition-colors",
-                            isActive ? "text-white" : "text-text-muted group-hover:text-text-primary"
-                          )}
-                          aria-hidden="true"
-                        />
-                        <span className="truncate">{item.label}</span>
-                      </div>
-                      {typeof count === "number" && (
-                        <span
-                          className={cn(
-                            "text-[10px] font-mono px-1.5 py-0.2 rounded-full text-right",
-                            isActive
-                              ? "bg-white/20 text-white"
-                              : "bg-surface-muted text-text-muted group-hover:text-text-secondary"
-                          )}
-                        >
-                          {count > 999 ? `${(count / 1000).toFixed(1)}k` : count}
-                        </span>
-                      )}
-                    </>
-                  )}
-                </NavLink>
-              );
-            })}
-          </nav>
+          </NavLink>
+          <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="Close navigation" className="md:hidden">
+            <X className="h-4 w-4" aria-hidden="true" />
+          </Button>
         </div>
 
-        {/* Footer info: Local-first guarantee */}
-        <div className="p-3 border-t border-border-subtle bg-surface-subtle/50 text-[11px] text-text-muted">
-          <div className="flex items-center justify-between font-mono text-[10px]">
-            <span>ENGINE: AIR-GAPPED</span>
-            <span className="text-status-success font-semibold">ONLINE</span>
-          </div>
-          <div className="text-[10px] text-text-disabled mt-1">
-            Section 63 BSA Ready
-          </div>
+        {/* Navigation */}
+        <nav className="flex-1 overflow-y-auto px-2 py-3" aria-label="Main navigation">
+          {NAV_GROUPS.map((group) => (
+            <div key={group.id} className="mb-4 last:mb-0">
+              <h2 className="mb-1 px-2.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-text-disabled">
+                {group.label}
+              </h2>
+              <ul className="space-y-px">
+                {group.items.map((item) => (
+                  <NavEntry key={item.label} item={item} onNavigate={onClose} />
+                ))}
+              </ul>
+            </div>
+          ))}
+        </nav>
+
+        {/* Footer */}
+        <div className="shrink-0 border-t border-border px-2 py-2">
+          <ul>
+            <NavEntry item={SETTINGS_NAV} onNavigate={onClose} />
+          </ul>
         </div>
       </aside>
     </>
