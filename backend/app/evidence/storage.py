@@ -20,12 +20,15 @@ and evidence_id) to prevent path traversal attacks.
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 from pathlib import Path
 from typing import BinaryIO
 
 from app.evidence.hashing import compute_sha256
+
+logger = logging.getLogger(__name__)
 
 
 class EvidenceStorageError(Exception):
@@ -175,7 +178,14 @@ def store_evidence(
             "Possible path traversal attempt."
         )
 
-    # Copy the evidence to the artifact path
+    # Copy the evidence to the artifact path.
+    #
+    # The destination is opened with exclusive create ("xb"): the file is created by
+    # this call or the call fails — an existing artifact can never be overwritten,
+    # even if another writer creates the same path after the exists() check above.
+    # `created` records whether this call created the file; cleanup below only ever
+    # removes a file this call created, never a pre-existing artifact.
+    created = False
     try:
         if isinstance(source, (str, Path)):
             source_path = Path(source)
@@ -191,10 +201,15 @@ def store_evidence(
                     "Symlinks are not followed for evidence ingestion."
                 )
 
-            shutil.copy2(str(source_path), str(artifact_path))
+            with open(source_path, "rb") as src, open(artifact_path, "xb") as dest:
+                created = True
+                shutil.copyfileobj(src, dest, 65_536)
+            # Preserve source metadata (mtime etc.) exactly as shutil.copy2 did.
+            shutil.copystat(str(source_path), str(artifact_path))
         else:
             # Stream from file-like object
-            with open(artifact_path, "wb") as dest:
+            with open(artifact_path, "xb") as dest:
+                created = True
                 while True:
                     chunk = source.read(65_536)
                     if not chunk:
@@ -202,14 +217,36 @@ def store_evidence(
                     dest.write(chunk)
     except EvidenceStorageError:
         raise
+    except FileExistsError as e:
+        # Lost a creation race for this path: the file belongs to someone else.
+        raise EvidenceStorageError(
+            f"Evidence artifact already exists: {artifact_path}. "
+            "Evidence is immutable and cannot be overwritten."
+        ) from e
     except OSError as e:
-        _cleanup_failed_storage(artifact_path)
+        if created:
+            _cleanup_failed_storage(artifact_path)
         raise EvidenceStorageError(
             f"Failed to copy evidence to storage: {e}"
         ) from e
+    except BaseException:
+        # Any other failure mid-copy (e.g. the upload stream raising) would otherwise
+        # leave a partial file whose bytes do not match the evidence hash.
+        if created:
+            _cleanup_failed_storage(artifact_path)
+        raise
 
     # Verify the stored artifact hash matches the expected hash
-    stored_hash = compute_sha256(artifact_path)
+    try:
+        stored_hash = compute_sha256(artifact_path)
+    except BaseException as e:
+        # Verification could not complete: the artifact is unverified, remove it.
+        _cleanup_failed_storage(artifact_path)
+        if not isinstance(e, Exception):
+            raise
+        raise EvidenceStorageError(
+            f"Failed to verify stored evidence hash: {e}. Evidence artifact has been removed."
+        ) from e
     if stored_hash != expected_hash.lower():
         _cleanup_failed_storage(artifact_path)
         raise EvidenceStorageError(
@@ -232,22 +269,25 @@ def remove_evidence(case_dir: str | Path, evidence_id: str) -> bool:
         evidence_id: Evidence identifier.
 
     Returns:
-        True if the evidence was removed, False if it did not exist.
+        True if the evidence was removed, False if it did not exist or could
+        not be removed (a removal failure is logged).
     """
     artifact_path = get_evidence_path(case_dir, evidence_id)
     if artifact_path.exists():
         try:
             artifact_path.unlink()
         except OSError:
-            pass
+            # Do not hide a failed cleanup: the artifact would remain as an orphan.
+            logger.exception("Failed to remove evidence artifact %s", artifact_path)
+            return False
         return True
     return False
 
 
 def _cleanup_failed_storage(artifact_path: Path) -> None:
-    """Remove a partially-stored evidence artifact after a failure."""
+    """Remove a partially-stored evidence artifact after a failure (best effort, logged)."""
     try:
         if artifact_path.exists():
             artifact_path.unlink()
     except OSError:
-        pass  # best-effort cleanup
+        logger.exception("Failed to remove partially stored evidence artifact %s", artifact_path)

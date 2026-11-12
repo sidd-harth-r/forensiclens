@@ -20,11 +20,14 @@ separately. This module clearly distinguishes between:
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 # Schema version corresponding to latest migration
@@ -537,6 +540,7 @@ def open_case_db(
     *,
     create: bool = False,
     read_only: bool = False,
+    check_same_thread: bool = True,
 ) -> sqlite3.Connection:
     """
     Open a case database connection with required pragmas.
@@ -548,6 +552,14 @@ def open_case_db(
                 the file is missing.
         read_only: If True, enforce read-only execution (PRAGMA query_only = ON)
                    to guarantee evidence immutability during retrieval and verification.
+        check_same_thread: Passed through to ``sqlite3.connect``. Keep the default
+                   (True) everywhere except request-scoped FastAPI dependencies:
+                   FastAPI may run a sync ``yield`` dependency's setup, the sync
+                   endpoint and the dependency's teardown on different threadpool
+                   workers. Those connections are owned by exactly one request and
+                   used strictly sequentially, so relaxing the thread-affinity check
+                   there is safe; it must not be relaxed for connections that are
+                   shared between concurrent callers.
 
     Returns:
         A configured sqlite3.Connection with foreign keys, WAL, and
@@ -568,9 +580,9 @@ def open_case_db(
     if read_only:
         # Enforce OS-level and SQLite-level read-only mode (URI mode=ro + PRAGMA query_only = ON)
         uri = db_path.resolve().as_uri() + "?mode=ro"
-        conn = sqlite3.connect(uri, uri=True)
+        conn = sqlite3.connect(uri, uri=True, check_same_thread=check_same_thread)
     else:
-        conn = sqlite3.connect(str(db_path))
+        conn = sqlite3.connect(str(db_path), check_same_thread=check_same_thread)
 
     conn.row_factory = sqlite3.Row
 
@@ -590,13 +602,20 @@ def open_case_db(
     return conn
 
 
-def open_case_db_readonly(db_path: str | Path) -> sqlite3.Connection:
+def open_case_db_readonly(
+    db_path: str | Path,
+    *,
+    check_same_thread: bool = True,
+) -> sqlite3.Connection:
     """
     Open a case database connection in strictly read-only mode (PRAGMA query_only = ON).
 
     Used during claim verification and evidence retrieval to ensure absolute immutability.
+    See ``open_case_db`` for when ``check_same_thread`` may be relaxed.
     """
-    return open_case_db(db_path, create=False, read_only=True)
+    return open_case_db(
+        db_path, create=False, read_only=True, check_same_thread=check_same_thread
+    )
 
 
 def initialize_case_db(
@@ -838,12 +857,18 @@ def verify_schema(conn: sqlite3.Connection) -> dict:
 
 
 def close_case_db(conn: sqlite3.Connection) -> None:
-    """Safely close a case database connection."""
+    """
+    Safely close a case database connection.
+
+    Never raises (callers invoke this from ``finally`` blocks), but a failed
+    close is logged: a connection that cannot be closed stays open until
+    garbage collection, holding file handles and WAL read locks.
+    """
     if conn:
         try:
             conn.close()
         except sqlite3.Error:
-            pass
+            logger.exception("Failed to close case database connection %r", conn)
 
 
 # ---------------------------------------------------------------

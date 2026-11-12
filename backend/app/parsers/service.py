@@ -56,6 +56,39 @@ class ProcessResult:
     error_summary: Optional[str] = None
 
 
+def _set_failure_status_unless_persisted(
+    conn: sqlite3.Connection, case_id: str, evidence_id: str, status: str
+) -> bool:
+    """
+    Record a failure status (FAILED / UNSUPPORTED) for this processing attempt —
+    but never over a persisted parse result.
+
+    A request's own persistence is atomic, so if raw records exist for the
+    evidence they belong to a concurrent request that succeeded; its committed
+    status is authoritative. Single statement, so the guard and the write are
+    atomic. Returns False (nothing written) when a persisted result exists.
+    """
+    cur = conn.execute(
+        """
+        UPDATE evidence_files
+        SET parser_status = ?
+        WHERE case_id = ? AND evidence_id = ?
+          AND NOT EXISTS (
+              SELECT 1 FROM raw_records WHERE case_id = ? AND evidence_id = ?
+          )
+        """,
+        (status, case_id, evidence_id, case_id, evidence_id),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def _already_processed(case_id: str, evidence_id: str) -> AlreadyPersistedError:
+    return AlreadyPersistedError(
+        f"Evidence '{evidence_id}' in case '{case_id}' has already been processed."
+    )
+
+
 def process_evidence(
     case_dir: str | Path,
     case_id: str,
@@ -153,16 +186,9 @@ def process_evidence(
         try:
             parser = reg.get(format_candidate)
         except UnknownParserError:
-            # Mark evidence as UNSUPPORTED in database
-            conn.execute(
-                """
-                UPDATE evidence_files
-                SET parser_status = 'UNSUPPORTED'
-                WHERE case_id = ? AND evidence_id = ?
-                """,
-                (case_id, evidence_id),
-            )
-            conn.commit()
+            # Mark evidence as UNSUPPORTED in database (never over a persisted result)
+            if not _set_failure_status_unless_persisted(conn, case_id, evidence_id, "UNSUPPORTED"):
+                raise _already_processed(case_id, evidence_id)
 
             return ProcessResult(
                 case_id=case_id,
@@ -176,29 +202,30 @@ def process_evidence(
                 error_summary=f"No registered parser available for format '{format_candidate}'",
             )
 
-        # 5. Mark status as PROCESSING
-        conn.execute(
+        # 5. Mark status as PROCESSING — only if no parse result exists yet. The
+        #    step-3 check is not atomic with this write: a concurrent request for the
+        #    same evidence may have persisted (and set PARSED/PARTIAL) in between.
+        #    Making the update conditional in a single statement ensures a losing
+        #    request never overwrites a completed status with PROCESSING.
+        cur = conn.execute(
             """
             UPDATE evidence_files
             SET parser_status = 'PROCESSING'
             WHERE case_id = ? AND evidence_id = ?
+              AND NOT EXISTS (
+                  SELECT 1 FROM raw_records WHERE case_id = ? AND evidence_id = ?
+              )
             """,
-            (case_id, evidence_id),
+            (case_id, evidence_id, case_id, evidence_id),
         )
         conn.commit()
+        if cur.rowcount == 0:
+            raise _already_processed(case_id, evidence_id)
 
         # 6. Verify immutable storage artifact exists
         storage_path = get_evidence_path(case_dir, evidence_id)
         if not storage_path.is_file():
-            conn.execute(
-                """
-                UPDATE evidence_files
-                SET parser_status = 'FAILED'
-                WHERE case_id = ? AND evidence_id = ?
-                """,
-                (case_id, evidence_id),
-            )
-            conn.commit()
+            _set_failure_status_unless_persisted(conn, case_id, evidence_id, "FAILED")
             raise EvidenceArtifactNotFoundError(
                 f"Immutable evidence artifact not found on disk: {storage_path}"
             )
@@ -207,15 +234,8 @@ def process_evidence(
         try:
             parse_result = parser.parse(storage_path, evidence_id=evidence_id)
         except Exception as pe:
-            conn.execute(
-                """
-                UPDATE evidence_files
-                SET parser_status = 'FAILED'
-                WHERE case_id = ? AND evidence_id = ?
-                """,
-                (case_id, evidence_id),
-            )
-            conn.commit()
+            if not _set_failure_status_unless_persisted(conn, case_id, evidence_id, "FAILED"):
+                raise _already_processed(case_id, evidence_id) from pe
             return ProcessResult(
                 case_id=case_id,
                 evidence_id=evidence_id,
@@ -236,16 +256,16 @@ def process_evidence(
                 parse_result=parse_result,
                 conn=conn,
             )
+        except AlreadyPersistedError:
+            # A concurrent request for the same evidence persisted first (the
+            # persistence layer re-checks atomically under its write lock). That
+            # result is complete and authoritative: leave its status untouched and
+            # surface a conflict (HTTP 409) instead of marking the evidence FAILED.
+            raise
         except Exception as pse:
-            conn.execute(
-                """
-                UPDATE evidence_files
-                SET parser_status = 'FAILED'
-                WHERE case_id = ? AND evidence_id = ?
-                """,
-                (case_id, evidence_id),
-            )
-            conn.commit()
+            if not _set_failure_status_unless_persisted(conn, case_id, evidence_id, "FAILED"):
+                # Another request's result was persisted meanwhile; keep it.
+                raise _already_processed(case_id, evidence_id) from pse
             raise PersistenceError(f"Persistence transaction failed: {pse}") from pse
 
         error_summary = None

@@ -15,6 +15,7 @@ Enforces:
 
 from __future__ import annotations
 
+import logging
 import mimetypes
 import os
 import sqlite3
@@ -32,6 +33,8 @@ from app.evidence.storage import (
     remove_evidence,
     store_evidence,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class EvidenceIngestionError(Exception):
@@ -140,6 +143,33 @@ def _count_lines_safe(file_path: Path) -> Optional[int]:
         return None
 
 
+def _discard_new_artifact(conn: sqlite3.Connection, case_dir: Path, evidence_id: str) -> None:
+    """
+    Remove an artifact stored by the current ingestion call after a failure.
+
+    Only called for an `evidence_id` whose file this call created exclusively.
+    Guard: never remove the artifact of a committed evidence record. If that cannot
+    be confirmed (database error), the file is kept and the condition is logged —
+    an orphaned file is recoverable, a deleted evidence artifact is not.
+    """
+    try:
+        committed = conn.execute(
+            "SELECT 1 FROM evidence_files WHERE evidence_id = ?", (evidence_id,)
+        ).fetchone()
+    except sqlite3.Error:
+        logger.exception(
+            "Could not confirm evidence %s is unreferenced; keeping stored artifact", evidence_id
+        )
+        return
+    if committed:
+        logger.error(
+            "Not removing artifact for evidence %s: a committed record references it", evidence_id
+        )
+        return
+    if not remove_evidence(case_dir, evidence_id) and get_evidence_path(case_dir, evidence_id).exists():
+        logger.error("Orphaned evidence artifact could not be removed: evidence %s", evidence_id)
+
+
 def ingest_evidence(
     conn: sqlite3.Connection,
     case_dir: str | Path,
@@ -209,7 +239,10 @@ def ingest_evidence(
             f"Evidence size ({object_size} bytes) exceeds configured limit ({max_bytes} bytes)"
         )
 
-    # 5. Check for duplicate evidence in this case (case-scoped deduplication)
+    # 5. Fast-path duplicate check (case-scoped deduplication). This avoids storing
+    #    an obvious duplicate, but it is NOT authoritative: concurrent uploads of the
+    #    same content can all pass it. The authoritative re-check runs in step 9
+    #    under the database write reservation.
     row = conn.execute(
         "SELECT evidence_id FROM evidence_files WHERE case_id = ? AND object_hash = ?",
         (case_id, object_hash),
@@ -221,8 +254,14 @@ def ingest_evidence(
             existing_evidence_id=row[0],
         )
 
-    # 6. Assign unique evidence_id
+    # 6. Assign unique evidence_id. A caller-supplied ID that already has a record
+    #    is rejected before anything is written, so this call can never store a new
+    #    file under (or later remove) the storage path of an existing record.
     eid = evidence_id or generate_evidence_id()
+    if evidence_id is not None and conn.execute(
+        "SELECT 1 FROM evidence_files WHERE evidence_id = ?", (eid,)
+    ).fetchone():
+        raise EvidenceIngestionError(f"Evidence ID already exists: {eid}")
 
     # Reset stream pointer if source was a file-like object
     if hasattr(source, "seek"):
@@ -231,7 +270,10 @@ def ingest_evidence(
         except Exception:
             pass
 
-    # 7. Store the immutable artifact and verify post-storage SHA-256
+    # 7. Store the immutable artifact and verify post-storage SHA-256.
+    #    store_evidence creates the file exclusively, so on success the artifact at
+    #    `eid` was created by this call and is owned by it until the record commits.
+    #    On failure it never removes a file it did not create.
     try:
         artifact_path = store_evidence(
             source=source,
@@ -242,15 +284,44 @@ def ingest_evidence(
     except EvidenceStorageError as e:
         raise EvidenceIngestionError(f"Storage failed: {e}") from e
 
-    # 8. Detect format, media type, and line count
-    detected_media_type, detected_format = detect_media_type_and_format(
-        safe_original_name,
-        explicit_format=format_name,
-        explicit_media_type=media_type,
-    )
-    total_lines = _count_lines_safe(artifact_path)
+    # From here until commit, every failure path must discard the new artifact.
+    owns_transaction = False
+    try:
+        # 8. Detect format, media type, and line count
+        detected_media_type, detected_format = detect_media_type_and_format(
+            safe_original_name,
+            explicit_format=format_name,
+            explicit_media_type=media_type,
+        )
+        total_lines = _count_lines_safe(artifact_path)
 
-    # 9. Insert database record (atomic with rollback of file on error)
+        # 9. Take the write reservation, re-check for a duplicate and insert, so the
+        #    check and the insert are atomic with respect to every other writer
+        #    (including other processes). If the caller already holds a transaction,
+        #    the caller owns locking (pre-existing behaviour) and the re-check runs
+        #    inside the caller's transaction.
+        if not conn.in_transaction:
+            conn.execute("BEGIN IMMEDIATE")
+            owns_transaction = True
+
+        row = conn.execute(
+            "SELECT evidence_id FROM evidence_files WHERE case_id = ? AND object_hash = ?",
+            (case_id, object_hash),
+        ).fetchone()
+        if row:
+            # A concurrent upload of the same content won the race.
+            raise DuplicateEvidenceError(
+                case_id=case_id,
+                object_hash=object_hash,
+                existing_evidence_id=row[0],
+            )
+    except BaseException:
+        if owns_transaction and conn.in_transaction:
+            conn.rollback()
+        _discard_new_artifact(conn, case_dir, eid)
+        raise
+
+    # Insert database record (atomic with removal of the new file on error)
     now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     try:
@@ -286,9 +357,14 @@ def ingest_evidence(
             ),
         )
         conn.commit()
-    except Exception as e:
-        # Atomic cleanup: remove stored artifact so no orphan file remains
-        remove_evidence(case_dir, eid)
+    except BaseException as e:
+        # Atomic cleanup: end the failed transaction, then remove the artifact this
+        # call stored so no orphan file remains.
+        if owns_transaction and conn.in_transaction:
+            conn.rollback()
+        _discard_new_artifact(conn, case_dir, eid)
+        if not isinstance(e, Exception):
+            raise
         raise EvidenceIngestionError(
             f"Database insertion failed, cleaned up artifact: {e}"
         ) from e

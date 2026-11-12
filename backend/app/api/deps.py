@@ -51,11 +51,17 @@ def get_case_connection(case_id: str) -> Generator[sqlite3.Connection, None, Non
     Open an isolated SQLite connection for the specified case.
 
     Guarantees the connection is closed when the HTTP request finishes.
+
+    FastAPI runs this sync generator's setup and teardown, and the sync
+    endpoint that consumes it, on (possibly different) threadpool workers.
+    The connection is owned by this single request and used strictly
+    sequentially across those steps, so the sqlite3 thread-affinity check is
+    relaxed for this connection only (see ``open_case_db``).
     """
     case_dir = get_verified_case_dir(case_id)
     db_path = case_dir / "case.db"
 
-    conn = open_case_db(db_path)
+    conn = open_case_db(db_path, check_same_thread=False)
     try:
         yield conn
     finally:
@@ -67,11 +73,13 @@ def get_readonly_case_connection(case_id: str) -> Generator[sqlite3.Connection, 
     Open an isolated, read-only SQLite connection (PRAGMA query_only = ON) for the specified case.
 
     Guarantees evidence immutability during retrieval and verification operations.
+    Request-scoped like ``get_case_connection``, so the thread-affinity check is
+    relaxed for the same reason.
     """
     case_dir = get_verified_case_dir(case_id)
     db_path = case_dir / "case.db"
 
-    conn = open_case_db_readonly(db_path)
+    conn = open_case_db_readonly(db_path, check_same_thread=False)
     try:
         yield conn
     finally:

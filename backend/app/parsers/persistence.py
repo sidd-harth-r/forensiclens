@@ -206,9 +206,24 @@ class ParserPersistenceService:
             conn = open_case_db(db_path)
             close_on_exit = True
 
+        # Transaction ownership: if the caller has no open transaction we own it and
+        # take the write reservation *before* any read (BEGIN IMMEDIATE). Otherwise the
+        # first statement inside the SAVEPOINT below opens a deferred transaction; the
+        # validation reads and the FTS5 trigger's config reads establish a WAL read
+        # snapshot, and if another connection commits before our first INSERT the
+        # read->write upgrade fails with SQLITE_BUSY immediately (busy_timeout cannot
+        # help a stale snapshot). Taking the reservation first makes concurrent writers
+        # queue on busy_timeout instead, and makes the idempotency check (step 3)
+        # atomic with the inserts. If the caller already holds a transaction, the caller
+        # owns locking and commit, and behaviour is unchanged.
+        owns_transaction = False
         try:
-            # Ensure foreign key constraints are enabled
+            # Ensure foreign key constraints are enabled (must run outside a transaction)
             conn.execute("PRAGMA foreign_keys = ON")
+
+            if not conn.in_transaction:
+                conn.execute("BEGIN IMMEDIATE")
+                owns_transaction = True
 
             # 1. Validate case existence
             case_row = conn.execute(
@@ -249,6 +264,9 @@ class ParserPersistenceService:
                         "SELECT COUNT(*) FROM events WHERE case_id = ? AND evidence_id = ?",
                         (case_id, evidence_id),
                     ).fetchone()[0]
+                    if owns_transaction:
+                        # Nothing was written; end the read-only transaction and free the lock.
+                        conn.commit()
                     return PersistenceResult(
                         case_id=case_id,
                         evidence_id=evidence_id,
@@ -421,9 +439,10 @@ class ParserPersistenceService:
                     ),
                 )
 
-                # Release savepoint and commit if connection was opened locally
+                # Release savepoint; commit if we own the transaction (inside BEGIN
+                # IMMEDIATE, RELEASE no longer commits) or opened the connection locally.
                 conn.execute(f"RELEASE SAVEPOINT {sp_name}")
-                if close_on_exit:
+                if owns_transaction or close_on_exit:
                     conn.commit()
 
                 return PersistenceResult(
@@ -449,6 +468,14 @@ class ParserPersistenceService:
                 raise PersistenceError(
                     f"Failed to persist parse result: {e}"
                 ) from e
+
+        except BaseException:
+            # Validation failure, idempotency rejection or persistence failure: the
+            # savepoint (if any) has already been rolled back above; end the owned
+            # transaction so nothing is persisted and the write reservation is released.
+            if owns_transaction and conn.in_transaction:
+                conn.rollback()
+            raise
 
         finally:
             if close_on_exit and conn is not None:
